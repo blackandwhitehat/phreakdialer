@@ -1,1118 +1,512 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Phone, Play, Mic, Zap, ChevronDown } from 'lucide-react';
+import { Phone, Mic, MicOff, Play, X, Download, ChevronDown, ChevronUp } from 'lucide-react';
+
+// ── Frequency Tables ──────────────────────────────────────
+const DTMF = {
+  '1':[697,1209],'2':[697,1336],'3':[697,1477],'A':[697,1633],
+  '4':[770,1209],'5':[770,1336],'6':[770,1477],'B':[770,1633],
+  '7':[852,1209],'8':[852,1336],'9':[852,1477],'C':[852,1633],
+  '*':[941,1209],'0':[941,1336],'#':[941,1477],'D':[941,1633],
+};
+const MF = {
+  '1':[700,900],'2':[700,1100],'3':[900,1100],
+  '4':[700,1300],'5':[900,1300],'6':[1100,1300],
+  '7':[700,1500],'8':[900,1500],'9':[1100,1500],
+  '0':[1300,1500],'11':[700,1700],'12':[900,1700],
+  'KP':[1100,1700],'ST':[1500,1700],'KP2':[1300,1700],
+  'ST2':[1700,2200],'ST3':[1500,2200],
+};
+
+// ── Styles ──────────────────────────────────────
+const S = {
+  bg: '#0a0a14', panel: '#0e0e1c', border: '#1a1a30',
+  green: '#00ff88', greenDim: 'rgba(0,255,136,.15)',
+  blue: '#0055ff', red: '#ff3333', orange: '#ff8800',
+  text: '#e0e0f0', dim: '#555570', mono: "'Share Tech Mono', 'Courier New', monospace",
+};
 
 const PhreakDialer = () => {
-  // State
-  const [mode, setMode] = useState('DTMF'); // DTMF or MF
-  const [toneSequence, setToneSequence] = useState('');
-  const [isListening, setIsListening] = useState(false);
-  const [detectedTones, setDetectedTones] = useState([]);
-  const [currentTone, setCurrentTone] = useState(null);
-  const [terminalLog, setTerminalLog] = useState(['PhreakDialer initialized']);
-  const [logExpanded, setLogExpanded] = useState(false);
-  
-  // Audio refs
-  const audioContextRef = useRef(null);
-  const oscillatorsRef = useRef([]);
-  const micStreamRef = useRef(null);
-  const analyserRef = useRef(null);
-  const listenerFrameRef = useRef(null);
-  const audioUnlockedRef = useRef(false);
+  const [mode, setMode] = useState('DTMF');
+  const [seq, setSeq] = useState('');
+  const [log, setLog] = useState(['PhreakDialer initialized']);
+  const [logOpen, setLogOpen] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [detected, setDetected] = useState(null);
+  const [detectedLog, setDetectedLog] = useState([]);
 
-  // Tone definitions
-  const tones = {
-    dtmf: {
-      '1': [697, 1209], '2': [697, 1336], '3': [697, 1477], 'A': [697, 1633],
-      '4': [770, 1209], '5': [770, 1336], '6': [770, 1477], 'B': [770, 1633],
-      '7': [852, 1209], '8': [852, 1336], '9': [852, 1477], 'C': [852, 1633],
-      '*': [941, 1209], '0': [941, 1336], '#': [941, 1477], 'D': [941, 1633]
-    },
-    mf: {
-      '1': [700, 900], '2': [700, 1100], '3': [900, 1100],
-      '4': [700, 1300], '5': [900, 1300], '6': [1100, 1300],
-      '7': [700, 1500], '8': [900, 1500], '9': [1100, 1500],
-      '0': [1300, 1500],
-      '11': [700, 1700], '12': [900, 1700],
-      'KP': [1100, 1700], 'ST': [1500, 1700],
-      'KP2': [1300, 1700], 'ST2': [1700, 2200], 'ST3': [1500, 2200]
-    },
-    special: {
-      'SF2600': [2600],
-      'NICKEL': [2200],
-      'DIME': [2200],
-      'QUARTER': [2200],
-      'TRUNK_SEIZE': [2600, 2400],
-      'TRUNK_CLEAR': [2400]
-    }
-  };
+  const ctxRef = useRef(null);
+  const oscsRef = useRef([]);
+  const unlocked = useRef(false);
+  const streamRef = useRef(null);
+  const sustainRef = useRef(null);
 
-  // Log helper
-  const logMessage = (msg) => {
-    const time = new Date().toLocaleTimeString();
-    setTerminalLog(prev => [`[${time}] ${msg}`, ...prev].slice(0, 100));
-  };
-
-  // iOS Safari audio unlock
+  // ── iOS Audio Unlock ──────────────────────────────────
   useEffect(() => {
-    const unlockAudio = () => {
-      if (audioUnlockedRef.current) return;
+    const unlock = () => {
+      if (unlocked.current) return;
       try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!audioContextRef.current) {
-          audioContextRef.current = new AudioContext();
-        }
-        const ctx = audioContextRef.current;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!ctxRef.current) ctxRef.current = new AC();
+        const ctx = ctxRef.current;
         if (ctx.state === 'suspended') ctx.resume();
         const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
         const src = ctx.createBufferSource();
         src.buffer = buf;
         src.connect(ctx.destination);
         src.start(0);
-        audioUnlockedRef.current = true;
-      } catch (e) {
-        // Silent
-      }
+        unlocked.current = true;
+      } catch (e) {}
     };
-    
-    document.addEventListener('touchstart', unlockAudio, { once: false, passive: true });
-    document.addEventListener('mousedown', unlockAudio, { once: false, passive: true });
-    
+    document.addEventListener('touchstart', unlock, { passive: true });
+    document.addEventListener('mousedown', unlock, { passive: true });
     return () => {
-      document.removeEventListener('touchstart', unlockAudio);
-      document.removeEventListener('mousedown', unlockAudio);
-      stopAllTones();
+      document.removeEventListener('touchstart', unlock);
+      document.removeEventListener('mousedown', unlock);
     };
   }, []);
 
-  // Ensure audio context
-  const ensureAudioContext = () => {
-    if (!audioContextRef.current) {
-      try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioContextRef.current = new AudioContext();
-      } catch (e) {
-        logMessage('Audio initialization failed');
-        return false;
-      }
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-    return true;
+  // ── Keyboard Support ──────────────────────────────────
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      const k = e.key.toUpperCase();
+      if (mode === 'DTMF' && DTMF[k]) playTone(k);
+      else if (mode === 'DTMF' && DTMF[e.key]) playTone(e.key);
+      else if (mode === 'MF' && MF[k]) playTone(k);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode]);
+
+  const addLog = (msg) => {
+    const t = new Date().toLocaleTimeString();
+    setLog(prev => [`[${t}] ${msg}`, ...prev.slice(0, 99)]);
   };
 
-  // Generate tone with envelope shaping
-  const generateTone = (frequencies, duration = 300) => {
-    if (!ensureAudioContext()) return;
-    
-    stopAllTones();
-    
-    const ctx = audioContextRef.current;
+  // ── Audio Engine ──────────────────────────────────
+  const ensureCtx = () => {
+    if (!ctxRef.current) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      ctxRef.current = new AC();
+    }
+    if (ctxRef.current.state === 'suspended') ctxRef.current.resume();
+    return ctxRef.current;
+  };
+
+  const stopAll = () => {
+    oscsRef.current.forEach(o => { try { o.stop(); o.disconnect(); } catch(e){} });
+    oscsRef.current = [];
+  };
+
+  const genTone = (freqs, duration = 200) => {
+    const ctx = ensureCtx();
+    stopAll();
     const now = ctx.currentTime;
-    
-    // Gain node with envelope
-    const gainNode = ctx.createGain();
-    gainNode.gain.value = 0;
-    gainNode.connect(ctx.destination);
-    
-    // Attack: 10ms
-    gainNode.gain.linearRampToValueAtTime(0.5, now + 0.01);
-    
-    // Release: 10ms at the end
-    if (duration) {
-      const toneDuration = duration / 1000;
-      gainNode.gain.setValueAtTime(0.5, now + toneDuration - 0.01);
-      gainNode.gain.linearRampToValueAtTime(0, now + toneDuration);
-    }
-    
-    // Create oscillators
-    const newOscillators = [];
-    frequencies.forEach(freq => {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      osc.connect(gainNode);
-      osc.start(now);
-      newOscillators.push(osc);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.4, now + 0.01);
+    gain.connect(ctx.destination);
+
+    const newOscs = freqs.map(f => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      o.connect(gain);
+      o.start(now);
+      return o;
     });
-    
-    oscillatorsRef.current = newOscillators;
-    
-    if (duration) {
-      setTimeout(() => stopAllTones(), duration);
+    oscsRef.current = newOscs;
+
+    if (duration > 0) {
+      const dur = duration / 1000;
+      gain.gain.setValueAtTime(0.4, now + dur - 0.01);
+      gain.gain.linearRampToValueAtTime(0, now + dur);
+      newOscs.forEach(o => o.stop(now + dur + 0.05));
+      setTimeout(() => { oscsRef.current = []; }, duration + 60);
     }
+    // If duration <= 0, tone sustains until stopAll()
   };
 
-  // Stop all tones
-  const stopAllTones = () => {
-    oscillatorsRef.current.forEach(osc => {
-      try {
-        osc.stop();
-        osc.disconnect();
-      } catch (e) {
-        // Already stopped
-      }
-    });
-    oscillatorsRef.current = [];
-  };
-
-  // 2600Hz special handling: hold to play
-  const handle2600MouseDown = () => {
-    if (!ensureAudioContext()) return;
-    stopAllTones();
-    
-    const ctx = audioContextRef.current;
-    const gainNode = ctx.createGain();
-    gainNode.gain.value = 0.5;
-    gainNode.connect(ctx.destination);
-    
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = 2600;
-    osc.connect(gainNode);
-    osc.start(ctx.currentTime);
-    
-    oscillatorsRef.current = [osc];
-    logMessage('2600Hz tone started (hold)');
-    
+  const playTone = (key) => {
+    const table = mode === 'DTMF' ? DTMF : MF;
+    const freqs = table[key];
+    if (!freqs) return;
+    genTone(freqs);
+    setSeq(prev => prev + (prev ? ' ' : '') + key);
+    addLog(`${mode} ${key} [${freqs.join('+')}Hz]`);
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  const handle2600MouseUp = () => {
-    stopAllTones();
-    logMessage('2600Hz tone released');
-  };
-
-  // Play tone
-  const playTone = (tone) => {
-    let frequencies;
-    
-    if (mode === 'DTMF' && tones.dtmf[tone]) {
-      frequencies = tones.dtmf[tone];
-      logMessage(`DTMF: ${tone}`);
-    } else if (mode === 'MF' && tones.mf[tone]) {
-      frequencies = tones.mf[tone];
-      logMessage(`MF: ${tone}`);
-    } else {
-      return;
-    }
-    
-    generateTone(frequencies);
-    setToneSequence(prev => prev + (prev ? ' ' : '') + tone);
-    
+  const playSpecial = (label, freqs, dur) => {
+    genTone(freqs, dur);
+    setSeq(prev => prev + (prev ? ' ' : '') + label);
+    addLog(`${label} [${freqs.join('+')}Hz]`);
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  // Special tones
-  const playSpecialTone = (toneName, label) => {
-    const frequencies = tones.special[toneName];
-    if (!frequencies) return;
-    
-    let duration = 300;
-    if (toneName === 'NICKEL') {
-      generateTone([2200], 66);
-      duration = 66;
-    } else if (toneName === 'DIME') {
-      generateTone([2200], 66);
-      setTimeout(() => generateTone([2200], 66), 132);
-      duration = 264;
-    } else if (toneName === 'QUARTER') {
-      for (let i = 0; i < 5; i++) {
-        setTimeout(() => generateTone([2200], 33), i * 66);
-      }
-      duration = 330;
-    } else {
-      generateTone(frequencies, duration);
-    }
-    
-    logMessage(label);
-    setToneSequence(prev => prev + (prev ? ' ' : '') + label);
-    
+  // Red box coin tones
+  const playCoin = (coin) => {
+    addLog(`RED BOX: ${coin}`);
+    setSeq(prev => prev + (prev ? ' ' : '') + coin);
     if (navigator.vibrate) navigator.vibrate(10);
+    if (coin === 'NICKEL') { genTone([2200], 66); }
+    else if (coin === 'DIME') {
+      genTone([2200], 66);
+      setTimeout(() => genTone([2200], 66), 132);
+    } else if (coin === 'QUARTER') {
+      for (let i = 0; i < 5; i++) setTimeout(() => genTone([2200], 33), i * 66);
+    }
+  };
+
+  // 2600Hz sustain (hold to play)
+  const start2600 = () => {
+    genTone([2600], 0); // 0 = sustain
+    sustainRef.current = true;
+    addLog('SF 2600Hz ON');
+  };
+  const stop2600 = () => {
+    if (sustainRef.current) {
+      stopAll();
+      sustainRef.current = false;
+      setSeq(prev => prev + (prev ? ' ' : '') + '2600');
+      addLog('SF 2600Hz OFF');
+    }
   };
 
   // Play sequence
-  const playSequence = () => {
-    if (!toneSequence) {
-      logMessage('No sequence to play');
-      return;
-    }
-    
-    logMessage(`Playing: ${toneSequence}`);
-    
-    const toneArray = toneSequence.split(' ');
-    
-    toneArray.forEach((tone, index) => {
+  const playSeq = () => {
+    if (!seq.trim()) return;
+    addLog(`Playing: ${seq}`);
+    const tokens = seq.split(' ');
+    const table = mode === 'DTMF' ? DTMF : MF;
+    tokens.forEach((tok, i) => {
       setTimeout(() => {
-        let frequencies;
-        
-        if (tone === 'SF2600') {
-          frequencies = tones.special['SF2600'];
-        } else if (tone === 'NICKEL') {
-          generateTone([2200], 66);
-          return;
-        } else if (tone === 'DIME') {
-          generateTone([2200], 66);
-          setTimeout(() => generateTone([2200], 66), 132);
-          return;
-        } else if (tone === 'QUARTER') {
-          for (let i = 0; i < 5; i++) {
-            setTimeout(() => generateTone([2200], 33), i * 66);
-          }
-          return;
-        } else if (tones.dtmf[tone]) {
-          frequencies = tones.dtmf[tone];
-        } else if (tones.mf[tone]) {
-          frequencies = tones.mf[tone];
-        } else {
-          return;
-        }
-        
-        if (frequencies) generateTone(frequencies);
-      }, index * 500);
+        if (table[tok]) genTone(table[tok]);
+        else if (tok === '2600') genTone([2600], 500);
+        else if (tok === 'NICKEL') genTone([2200], 66);
+        else if (tok === 'DIME') { genTone([2200], 66); setTimeout(() => genTone([2200], 66), 132); }
+        else if (tok === 'QUARTER') { for (let j=0;j<5;j++) setTimeout(() => genTone([2200], 33), j*66); }
+        else if (tok === 'TRUNK') genTone([2600, 2400], 800);
+      }, i * 400);
     });
   };
 
-  // Clear sequence
-  const clearSequence = () => {
-    setToneSequence('');
-    logMessage('Sequence cleared');
+  // WAV export
+  const exportWAV = async () => {
+    if (!seq.trim()) { addLog('No sequence to export'); return; }
+    addLog('Rendering WAV...');
+    try {
+      const tokens = seq.split(' ');
+      const table = mode === 'DTMF' ? DTMF : MF;
+      const sr = 44100;
+      const toneDur = 0.2, gap = 0.15;
+      const total = tokens.length * (toneDur + gap);
+      const offCtx = new OfflineAudioContext(1, Math.ceil(sr * total), sr);
+
+      tokens.forEach((tok, i) => {
+        let freqs = table[tok] || (tok === '2600' ? [2600] : tok === 'TRUNK' ? [2600, 2400] : [2200]);
+        const start = i * (toneDur + gap);
+        const g = offCtx.createGain();
+        g.gain.setValueAtTime(0, start);
+        g.gain.linearRampToValueAtTime(0.4, start + 0.005);
+        g.gain.setValueAtTime(0.4, start + toneDur - 0.005);
+        g.gain.linearRampToValueAtTime(0, start + toneDur);
+        g.connect(offCtx.destination);
+        freqs.forEach(f => {
+          const o = offCtx.createOscillator();
+          o.type = 'sine'; o.frequency.value = f;
+          o.connect(g); o.start(start); o.stop(start + toneDur);
+        });
+      });
+
+      const buf = await offCtx.startRendering();
+      const data = buf.getChannelData(0);
+      const wavBuf = new ArrayBuffer(44 + data.length * 2);
+      const view = new DataView(wavBuf);
+      const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+      writeStr(0, 'RIFF'); view.setUint32(4, 36 + data.length * 2, true);
+      writeStr(8, 'WAVE'); writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true); view.setUint32(24, sr, true);
+      view.setUint32(28, sr * 2, true); view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true); writeStr(36, 'data');
+      view.setUint32(40, data.length * 2, true);
+      for (let i = 0; i < data.length; i++) {
+        const s = Math.max(-1, Math.min(1, data[i]));
+        view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      const blob = new Blob([wavBuf], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'phreakdialer.wav'; a.click();
+      URL.revokeObjectURL(url);
+      addLog('WAV exported');
+    } catch (e) { addLog('Export failed: ' + e.message); }
   };
 
-  // Goertzel algorithm
-  const TARGET_FREQS = [
-    697, 770, 852, 941,
-    1209, 1336, 1477, 1633,
-    700, 900, 1100, 1300, 1500, 1700,
-    2200, 2600, 2400
-  ];
-
-  const goertzel = (samples, sampleRate, targetFreq) => {
-    const N = samples.length;
-    const k = Math.round(N * targetFreq / sampleRate);
-    const w = (2 * Math.PI * k) / N;
-    const coeff = 2 * Math.cos(w);
-    let s0 = 0, s1 = 0, s2 = 0;
-    for (let i = 0; i < N; i++) {
-      s0 = samples[i] + coeff * s1 - s2;
-      s2 = s1;
-      s1 = s0;
-    }
-    return Math.sqrt(s1 * s1 + s2 * s2 - coeff * s1 * s2);
-  };
-
-  // Identify tone
-  const identifyTone = (magnitudes, sampleRate) => {
-    const threshold = 0.02;
-    const detected = [];
-    
-    TARGET_FREQS.forEach(freq => {
-      if (magnitudes[freq] > threshold) {
-        detected.push({ freq, mag: magnitudes[freq] });
+  // ── Tone Listener (AudioWorklet) ──────────────────────
+  const toggleListen = useCallback(async () => {
+    if (listening) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
       }
-    });
-
-    if (detected.length === 0) return null;
-    detected.sort((a, b) => b.mag - a.mag);
-    const top = detected.slice(0, 3);
-
-    // DTMF
-    const dtmfRows = { 697: 0, 770: 1, 852: 2, 941: 3 };
-    const dtmfCols = { 1209: 0, 1336: 1, 1477: 2, 1633: 3 };
-    const dtmfGrid = [
-      ['1', '2', '3', 'A'],
-      ['4', '5', '6', 'B'],
-      ['7', '8', '9', 'C'],
-      ['*', '0', '#', 'D'],
-    ];
-    
-    for (const f1 of top) {
-      for (const f2 of top) {
-        if (f1.freq in dtmfRows && f2.freq in dtmfCols) {
-          return { type: 'DTMF', key: dtmfGrid[dtmfRows[f1.freq]][dtmfCols[f2.freq]], freqs: [f1.freq, f2.freq] };
-        }
-      }
-    }
-
-    // MF
-    const mfFreqs = [700, 900, 1100, 1300, 1500, 1700];
-    const mfPairs = {
-      '700,900': '1', '700,1100': '2', '900,1100': '3',
-      '700,1300': '4', '900,1300': '5', '1100,1300': '6',
-      '700,1500': '7', '900,1500': '8', '1100,1500': '9',
-      '1300,1500': '0',
-      '700,1700': '11', '900,1700': '12',
-      '1100,1700': 'KP', '1500,1700': 'ST',
-      '1300,1700': 'KP2',
-    };
-    
-    const detectedMF = top.filter(d => mfFreqs.includes(d.freq)).map(d => d.freq).sort((a, b) => a - b);
-    if (detectedMF.length >= 2) {
-      const key = `${detectedMF[0]},${detectedMF[1]}`;
-      if (mfPairs[key]) return { type: 'MF', key: mfPairs[key], freqs: detectedMF.slice(0, 2) };
-    }
-
-    // SF 2600Hz
-    if (top[0].freq === 2600 && top[0].mag > threshold * 2) {
-      return { type: 'SF', key: '2600Hz', freqs: [2600] };
-    }
-
-    // Red Box 2200Hz
-    if (top[0].freq === 2200 && top[0].mag > threshold * 2) {
-      return { type: 'RED BOX', key: '2200Hz', freqs: [2200] };
-    }
-
-    // CCITT5
-    if (top.length >= 2) {
-      const freqSet = new Set(top.map(t => t.freq));
-      if (freqSet.has(2600) && freqSet.has(2400)) {
-        return { type: 'CCITT5', key: 'Trunk Seize', freqs: [2600, 2400] };
-      }
-    }
-
-    return null;
-  };
-
-  // Toggle listener
-  const toggleListener = useCallback(async () => {
-    if (isListening) {
-      if (listenerFrameRef.current) cancelAnimationFrame(listenerFrameRef.current);
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(t => t.stop());
-        micStreamRef.current = null;
-      }
-      setIsListening(false);
-      setCurrentTone(null);
-      logMessage('Listener stopped');
+      setListening(false);
+      setDetected(null);
+      addLog('Listener stopped');
       return;
     }
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = stream;
-      ensureAudioContext();
-      const ctx = audioContextRef.current;
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 4096;
-      source.connect(analyser);
-      analyserRef.current = analyser;
+      streamRef.current = stream;
+      const ctx = ensureCtx();
 
-      const bufLen = analyser.fftSize;
-      const buffer = new Float32Array(bufLen);
-      let lastDetected = null;
-      let lastTime = 0;
-
-      const detect = () => {
-        analyser.getFloatTimeDomainData(buffer);
-        
-        const magnitudes = {};
-        TARGET_FREQS.forEach(freq => {
-          magnitudes[freq] = goertzel(buffer, ctx.sampleRate, freq);
-        });
-
-        const tone = identifyTone(magnitudes, ctx.sampleRate);
-        const now = Date.now();
-
-        if (tone) {
-          setCurrentTone(tone);
-          const toneKey = `${tone.type}:${tone.key}`;
-          if (toneKey !== lastDetected || now - lastTime > 300) {
-            lastDetected = toneKey;
-            lastTime = now;
-            logMessage(`Detected ${tone.type}: ${tone.key}`);
-            setDetectedTones(prev => [...prev.slice(-49), { ...tone, time: now }]);
+      // Try AudioWorklet first, fall back to AnalyserNode
+      let usingWorklet = false;
+      try {
+        await ctx.audioWorklet.addModule(process.env.PUBLIC_URL + '/worklet/tone-processor.js');
+        const source = ctx.createMediaStreamSource(stream);
+        const worklet = new AudioWorkletNode(ctx, 'tone-processor');
+        worklet.port.onmessage = (ev) => {
+          if (ev.data) {
+            setDetected(ev.data);
+            setDetectedLog(prev => [ev.data, ...prev.slice(0, 49)]);
+            addLog(`Detected ${ev.data.type}: ${ev.data.key} [${ev.data.freqs.join('+')}Hz]`);
           }
-        } else {
-          setCurrentTone(null);
-          lastDetected = null;
-        }
+        };
+        source.connect(worklet);
+        worklet.connect(ctx.destination);
+        usingWorklet = true;
+      } catch (e) {
+        // AudioWorklet not supported, use fallback
+        addLog('AudioWorklet unavailable, using fallback decoder');
+      }
 
-        listenerFrameRef.current = requestAnimationFrame(detect);
-      };
+      if (!usingWorklet) {
+        // Fallback: AnalyserNode + main-thread Goertzel
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 4096;
+        source.connect(analyser);
+        const buf = new Float32Array(analyser.fftSize);
+        const targetFreqs = [697,770,852,941,1209,1336,1477,1633,700,900,1100,1300,1500,1700,2200,2400,2600];
+        const goertzel = (f) => {
+          const N = buf.length;
+          const k = Math.round(N * f / ctx.sampleRate);
+          const w = (2 * Math.PI * k) / N;
+          const c = 2 * Math.cos(w);
+          let s1 = 0, s2 = 0;
+          for (let i = 0; i < N; i++) { const s0 = buf[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+          return Math.sqrt(s1*s1 + s2*s2 - c*s1*s2);
+        };
+        let lastKey = null;
+        const detect = () => {
+          if (!streamRef.current) return;
+          analyser.getFloatTimeDomainData(buf);
+          const m = {};
+          targetFreqs.forEach(f => { m[f] = goertzel(f); });
+          // Simple DTMF check
+          const rows = [697,770,852,941].map((f,i) => ({i,f,m:m[f]}));
+          const cols = [1209,1336,1477,1633].map((f,i) => ({i,f,m:m[f]}));
+          const br = rows.reduce((a,b) => a.m>b.m?a:b);
+          const bc = cols.reduce((a,b) => a.m>b.m?a:b);
+          const th = 0.04;
+          let tone = null;
+          if (br.m > th && bc.m > th) {
+            const keys = "123A456B789C*0#D";
+            tone = { type:'DTMF', key:keys[br.i*4+bc.i], freqs:[br.f,bc.f] };
+          } else if (m[2600] > th*2) { tone = { type:'SF', key:'2600', freqs:[2600] }; }
+          else if (m[2200] > th*2) { tone = { type:'REDBOX', key:'2200', freqs:[2200] }; }
+          if (tone && tone.key !== lastKey) {
+            lastKey = tone.key;
+            setDetected(tone);
+            setDetectedLog(prev => [tone, ...prev.slice(0, 49)]);
+            addLog(`Detected ${tone.type}: ${tone.key}`);
+          } else if (!tone) { lastKey = null; setDetected(null); }
+          requestAnimationFrame(detect);
+        };
+        detect();
+      }
 
-      detect();
-      setIsListening(true);
-      logMessage('Listener started');
-    } catch (e) {
-      logMessage('Microphone access denied');
-    }
-  }, [isListening]);
+      setListening(true);
+      addLog('Listener started');
+    } catch (e) { addLog('Mic denied: ' + e.message); }
+  }, [listening]);
 
-  // Cleanup
   useEffect(() => {
-    return () => {
-      if (listenerFrameRef.current) cancelAnimationFrame(listenerFrameRef.current);
-      if (micStreamRef.current) micStreamRef.current.getTracks().forEach(t => t.stop());
-    };
+    return () => { if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); };
   }, []);
 
-  // Export WAV
-  const exportWAV = async () => {
-    if (!toneSequence) {
-      logMessage('No sequence to export');
-      return;
-    }
+  // ── Button Component ──────────────────────────────────
+  const Btn = ({ children, onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, color = S.green, big, style: sx, ...rest }) => (
+    <button
+      onClick={onClick} onMouseDown={onMouseDown} onMouseUp={onMouseUp}
+      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+      style={{
+        background: S.panel, border: `1px solid ${S.border}`, color,
+        fontFamily: S.mono, fontSize: big ? '1.2rem' : '.85rem', fontWeight: 'bold',
+        padding: big ? '14px' : '10px 12px', cursor: 'pointer', borderRadius: '4px',
+        transition: 'all .1s', userSelect: 'none', WebkitTapHighlightColor: 'transparent',
+        ...sx,
+      }}
+      onPointerDown={e => { e.currentTarget.style.background = color + '22'; e.currentTarget.style.borderColor = color; }}
+      onPointerUp={e => { e.currentTarget.style.background = S.panel; e.currentTarget.style.borderColor = S.border; }}
+      onPointerLeave={e => { e.currentTarget.style.background = S.panel; e.currentTarget.style.borderColor = S.border; }}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
 
-    logMessage('Rendering WAV...');
-
-    try {
-      const toneArray = toneSequence.split(' ');
-      const toneDuration = 0.3;
-      const gapDuration = 0.2;
-      const totalDuration = toneArray.length * (toneDuration + gapDuration);
-      
-      const sampleRate = 44100;
-      const offlineCtx = new OfflineAudioContext(1, Math.ceil(sampleRate * totalDuration), sampleRate);
-      
-      let currentTime = 0;
-      
-      toneArray.forEach(tone => {
-        let frequencies = null;
-        
-        if (tones.dtmf[tone]) frequencies = tones.dtmf[tone];
-        else if (tones.mf[tone]) frequencies = tones.mf[tone];
-        else if (tone === 'SF2600') frequencies = [2600];
-        else if (['NICKEL', 'DIME', 'QUARTER'].includes(tone)) frequencies = [2200];
-        
-        if (frequencies) {
-          const gainNode = offlineCtx.createGain();
-          gainNode.gain.setValueAtTime(0, currentTime);
-          gainNode.gain.linearRampToValueAtTime(0.5, currentTime + 0.01);
-          gainNode.gain.setValueAtTime(0.5, currentTime + toneDuration - 0.01);
-          gainNode.gain.linearRampToValueAtTime(0, currentTime + toneDuration);
-          gainNode.connect(offlineCtx.destination);
-          
-          frequencies.forEach(freq => {
-            const osc = offlineCtx.createOscillator();
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-            osc.connect(gainNode);
-            osc.start(currentTime);
-            osc.stop(currentTime + toneDuration);
-          });
-        }
-        
-        currentTime += toneDuration + gapDuration;
-      });
-      
-      const audioBuffer = await offlineCtx.startRendering();
-      const wav = audioBufferToWAV(audioBuffer);
-      
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(wav);
-      link.download = 'phreakdialer.wav';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      logMessage('WAV exported');
-    } catch (e) {
-      logMessage('Export failed');
-    }
-  };
-
-  // WAV encoder
-  const audioBufferToWAV = (audioBuffer) => {
-    const numberOfChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const bitDepth = 16;
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numberOfChannels * bytesPerSample;
-    const dataLength = audioBuffer.length * blockAlign;
-    const fileLength = 36 + dataLength;
-    
-    const arrayBuffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(arrayBuffer);
-    
-    const writeString = (offset, string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
-    };
-    
-    writeString(0, 'RIFF');
-    view.setUint32(4, fileLength, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, numberOfChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitDepth, true);
-    writeString(36, 'data');
-    view.setUint32(40, dataLength, true);
-    
-    const channelData = audioBuffer.getChannelData(0);
-    let offset = 44;
-    for (let i = 0; i < audioBuffer.length; i++) {
-      const sample = Math.max(-1, Math.min(1, channelData[i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-      offset += 2;
-    }
-    
-    return new Blob([arrayBuffer], { type: 'audio/wav' });
-  };
-
-  // Styles
-  const colors = {
-    bg: '#0a0a14',
-    panel: '#1a1a2e',
-    accent: '#00ff88',
-    blue: '#0055ff',
-    red: '#ff3333',
-    orange: '#ff8800',
-    text: '#e0e0e0',
-    dimText: '#808080'
-  };
+  // ── Render ──────────────────────────────────
+  const tbl = mode === 'DTMF' ? DTMF : MF;
+  const dtmfKeys = ['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D'];
+  const mfMain = ['1','2','3','4','5','6','7','8','9','11','0','12'];
+  const mfSide = ['KP','KP2','ST','ST2','ST3'];
 
   return (
-    <div style={{
-      backgroundColor: colors.bg,
-      color: colors.text,
-      minHeight: '100vh',
-      padding: '16px',
-      fontFamily: 'Share Tech Mono, monospace'
-    }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-        {/* HEADER */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '16px',
-          borderRadius: '4px',
-          marginBottom: '16px',
-          display: 'flex',
-          alignItems: 'center',
-          borderLeft: `4px solid ${colors.accent}`
-        }}>
-          <Phone color={colors.accent} size={32} style={{ marginRight: '12px' }} />
-          <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 'bold', letterSpacing: '2px' }}>
-            PHREAKDIALER
-          </h1>
+    <div style={{ background: S.bg, color: S.text, minHeight: '100vh', fontFamily: S.mono, padding: '12px' }}>
+      <div style={{ maxWidth: '480px', margin: '0 auto' }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0', borderBottom: `1px solid ${S.border}`, marginBottom: '12px' }}>
+          <Phone size={22} color={S.green} />
+          <span style={{ fontSize: '1.3rem', fontWeight: 'bold', letterSpacing: '3px' }}>
+            PHREAK<span style={{ color: S.green }}>DIALER</span>
+          </span>
         </div>
 
-        {/* MODE SWITCHER */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          marginBottom: '16px'
-        }}>
-          <button
-            onClick={() => setMode('DTMF')}
-            style={{
-              backgroundColor: mode === 'DTMF' ? colors.blue : colors.panel,
-              color: colors.text,
-              border: `1px solid ${mode === 'DTMF' ? colors.blue : colors.dimText}`,
-              padding: '10px 20px',
-              borderRadius: '4px',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              flex: 1,
-              transition: 'all 0.2s'
-            }}
-          >
-            [DTMF]
-          </button>
-          <button
-            onClick={() => setMode('MF')}
-            style={{
-              backgroundColor: mode === 'MF' ? colors.blue : colors.panel,
-              color: colors.text,
-              border: `1px solid ${mode === 'MF' ? colors.blue : colors.dimText}`,
-              padding: '10px 20px',
-              borderRadius: '4px',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              flex: 1,
-              transition: 'all 0.2s'
-            }}
-          >
-            [MF TONES]
-          </button>
+        {/* Mode Switcher */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+          {['DTMF', 'MF'].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              background: mode === m ? S.blue + '33' : 'transparent',
+              border: `1px solid ${mode === m ? S.blue : S.border}`,
+              color: mode === m ? '#fff' : S.dim, fontFamily: S.mono,
+              fontSize: '.75rem', fontWeight: 'bold', padding: '6px 16px',
+              cursor: 'pointer', letterSpacing: '1px', borderRadius: '3px',
+            }}>{m}</button>
+          ))}
         </div>
 
-        {/* SEQUENCE BUFFER */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '12px 16px',
-          borderRadius: '4px',
-          marginBottom: '16px',
-          borderLeft: `4px solid ${colors.accent}`
-        }}>
-          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '8px', textTransform: 'uppercase' }}>
-            Sequence Buffer
+        {/* Sequence Buffer */}
+        <div style={{ background: '#000', border: `1px solid ${S.border}`, borderRadius: '4px', padding: '10px 12px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '.65rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px' }}>SEQUENCE</div>
+          <div style={{ fontSize: '1rem', fontWeight: 'bold', minHeight: '22px', color: seq ? '#fff' : S.dim, overflowX: 'auto', whiteSpace: 'nowrap' }}>
+            {seq || '[ EMPTY ]'}
           </div>
-          <div style={{
-            backgroundColor: '#000',
-            padding: '12px',
-            borderRadius: '2px',
-            marginBottom: '12px',
-            minHeight: '32px',
-            fontFamily: 'monospace',
-            fontSize: '14px',
-            wordBreak: 'break-all'
-          }}>
-            {toneSequence || <span style={{ color: colors.dimText }}>[ EMPTY ]</span>}
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={playSequence}
-              style={{
-                backgroundColor: colors.blue,
-                color: colors.text,
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px'
-              }}
-            >
-              <Play size={14} /> PLAY
-            </button>
-            <button
-              onClick={clearSequence}
-              style={{
-                backgroundColor: colors.red,
-                color: colors.text,
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                flex: 1
-              }}
-            >
-              CLEAR
-            </button>
-            <button
-              onClick={exportWAV}
-              style={{
-                backgroundColor: colors.orange,
-                color: colors.text,
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                flex: 1
-              }}
-            >
-              WAV
-            </button>
+          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+            <Btn onClick={playSeq} color={S.green} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+              <Play size={13}/> PLAY
+            </Btn>
+            <Btn onClick={() => { setSeq(''); addLog('Cleared'); }} color={S.dim} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+              <X size={13}/> CLEAR
+            </Btn>
+            <Btn onClick={exportWAV} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+              <Download size={13}/> WAV
+            </Btn>
           </div>
         </div>
 
-        {/* DIALPAD */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '16px',
-          borderRadius: '4px',
-          marginBottom: '16px',
-          borderLeft: `4px solid ${colors.blue}`
-        }}>
-          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '12px', textTransform: 'uppercase' }}>
-            Dialpad [{mode}]
+        {/* Dialpad */}
+        {mode === 'DTMF' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '12px' }}>
+            {dtmfKeys.map(k => (
+              <Btn key={k} onClick={() => playTone(k)} big color={['A','B','C','D'].includes(k) ? S.blue : S.green}>{k}</Btn>
+            ))}
           </div>
-          
-          {mode === 'DTMF' ? (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '8px'
-            }}>
-              {['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D'].map(key => (
-                <button
-                  key={key}
-                  onClick={() => playTone(key)}
-                  style={{
-                    backgroundColor: ['A', 'B', 'C', 'D'].includes(key) ? colors.red : colors.panel,
-                    color: colors.text,
-                    border: `1px solid ${colors.blue}`,
-                    padding: '16px',
-                    borderRadius: '2px',
-                    fontSize: '18px',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    transition: 'all 0.1s'
-                  }}
-                  onMouseDown={(e) => e.target.style.opacity = '0.7'}
-                  onMouseUp={(e) => e.target.style.opacity = '1'}
-                >
-                  {key}
-                </button>
+        ) : (
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', flex: 3 }}>
+              {mfMain.map(k => (
+                <Btn key={k} onClick={() => playTone(k)} big>{k}</Btn>
               ))}
             </div>
-          ) : (
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '8px',
-                flex: 3
-              }}>
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '11', '0', '12'].map(key => (
-                  <button
-                    key={key}
-                    onClick={() => playTone(key)}
-                    style={{
-                      backgroundColor: colors.panel,
-                      color: colors.text,
-                      border: `1px solid ${colors.blue}`,
-                      padding: '16px',
-                      borderRadius: '2px',
-                      fontSize: '16px',
-                      fontWeight: 'bold',
-                      cursor: 'pointer'
-                    }}
-                    onMouseDown={(e) => e.target.style.opacity = '0.7'}
-                    onMouseUp={(e) => e.target.style.opacity = '1'}
-                  >
-                    {key}
-                  </button>
-                ))}
-              </div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr',
-                gap: '8px',
-                flex: 1
-              }}>
-                {['KP', 'KP2', 'ST', 'ST2', 'ST3'].map(key => (
-                  <button
-                    key={key}
-                    onClick={() => playTone(key)}
-                    style={{
-                      backgroundColor: colors.red,
-                      color: colors.text,
-                      border: `1px solid ${colors.red}`,
-                      padding: '12px',
-                      borderRadius: '2px',
-                      fontSize: '11px',
-                      fontWeight: 'bold',
-                      cursor: 'pointer'
-                    }}
-                    onMouseDown={(e) => e.target.style.opacity = '0.7'}
-                    onMouseUp={(e) => e.target.style.opacity = '1'}
-                  >
-                    {key}
-                  </button>
-                ))}
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
+              {mfSide.map(k => (
+                <Btn key={k} onClick={() => playTone(k)} color={S.blue} style={{ flex: 1, fontSize: '.7rem' }}>{k}</Btn>
+              ))}
             </div>
-          )}
-        </div>
-
-        {/* SPECIAL TONES */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '16px',
-          borderRadius: '4px',
-          marginBottom: '16px',
-          borderLeft: `4px solid ${colors.red}`
-        }}>
-          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '12px', textTransform: 'uppercase' }}>
-            Special Tones
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px' }}>
-            <button
-              onMouseDown={handle2600MouseDown}
-              onMouseUp={handle2600MouseUp}
-              onTouchStart={handle2600MouseDown}
-              onTouchEnd={handle2600MouseUp}
-              style={{
-                backgroundColor: colors.red,
-                color: colors.text,
-                border: `1px solid ${colors.red}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              2600Hz<br/><span style={{ fontSize: '10px' }}>(HOLD)</span>
-            </button>
-            <button
-              onClick={() => playSpecialTone('NICKEL', 'NICKEL')}
-              style={{
-                backgroundColor: colors.orange,
-                color: colors.text,
-                border: `1px solid ${colors.orange}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              NICKEL<br/><span style={{ fontSize: '10px' }}>5¢</span>
-            </button>
-            <button
-              onClick={() => playSpecialTone('DIME', 'DIME')}
-              style={{
-                backgroundColor: colors.orange,
-                color: colors.text,
-                border: `1px solid ${colors.orange}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              DIME<br/><span style={{ fontSize: '10px' }}>10¢</span>
-            </button>
-            <button
-              onClick={() => playSpecialTone('QUARTER', 'QUARTER')}
-              style={{
-                backgroundColor: colors.orange,
-                color: colors.text,
-                border: `1px solid ${colors.orange}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              QUARTER<br/><span style={{ fontSize: '10px' }}>25¢</span>
-            </button>
-            <button
-              onClick={() => playSpecialTone('TRUNK_SEIZE', 'SEIZE')}
-              style={{
-                backgroundColor: colors.red,
-                color: colors.text,
-                border: `1px solid ${colors.red}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              TRUNK<br/><span style={{ fontSize: '10px' }}>SEIZE</span>
-            </button>
-            <button
-              onClick={() => playSpecialTone('TRUNK_CLEAR', 'CLEAR')}
-              style={{
-                backgroundColor: colors.red,
-                color: colors.text,
-                border: `1px solid ${colors.red}`,
-                padding: '12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              TRUNK<br/><span style={{ fontSize: '10px' }}>CLEAR</span>
-            </button>
+        )}
+
+        {/* Special Tones */}
+        <div style={{ border: `1px solid ${S.border}`, borderRadius: '4px', padding: '10px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '.65rem', color: S.dim, marginBottom: '8px', letterSpacing: '1px' }}>SPECIAL TONES</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '8px' }}>
+            <Btn onClick={() => playCoin('NICKEL')} color={S.red}>5¢</Btn>
+            <Btn onClick={() => playCoin('DIME')} color={S.red}>10¢</Btn>
+            <Btn onClick={() => playCoin('QUARTER')} color={S.red}>25¢</Btn>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+            <Btn
+              onMouseDown={start2600} onMouseUp={stop2600}
+              onTouchStart={e => { e.preventDefault(); start2600(); }}
+              onTouchEnd={e => { e.preventDefault(); stop2600(); }}
+              color={S.orange} style={{ fontSize: '.75rem' }}
+            >2600Hz</Btn>
+            <Btn onClick={() => playSpecial('TRUNK', [2600, 2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>SEIZE</Btn>
+            <Btn onClick={() => playSpecial('CLEAR', [2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>CLEAR</Btn>
           </div>
         </div>
 
-        {/* TONE LISTENER */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '16px',
-          borderRadius: '4px',
-          marginBottom: '16px',
-          borderLeft: `4px solid ${colors.orange}`
-        }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '12px'
-          }}>
-            <div style={{ fontSize: '10px', color: colors.dimText, textTransform: 'uppercase' }}>
-              Tone Listener
-            </div>
-            <button
-              onClick={toggleListener}
-              style={{
-                backgroundColor: isListening ? colors.red : colors.orange,
-                color: colors.text,
-                border: 'none',
-                padding: '6px 12px',
-                borderRadius: '2px',
-                fontSize: '12px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <Mic size={12} /> {isListening ? 'STOP' : 'LISTEN'}
-            </button>
+        {/* Tone Listener */}
+        <div style={{ border: `1px solid ${listening ? S.orange : S.border}`, borderRadius: '4px', padding: '10px', marginBottom: '12px', transition: 'border-color .2s' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '.65rem', color: S.dim, letterSpacing: '1px' }}>TONE LISTENER</div>
+            <Btn onClick={toggleListen} color={listening ? S.red : S.orange}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 12px' }}>
+              {listening ? <><MicOff size={13}/> STOP</> : <><Mic size={13}/> LISTEN</>}
+            </Btn>
           </div>
-
-          {/* Current tone display */}
           <div style={{
-            backgroundColor: '#000',
-            padding: '16px',
-            borderRadius: '2px',
-            textAlign: 'center',
-            minHeight: '60px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginBottom: '12px',
-            border: currentTone ? `1px solid ${colors.orange}` : '1px solid #333'
+            background: '#000', borderRadius: '4px', padding: '12px', textAlign: 'center',
+            minHeight: '50px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            border: detected ? `1px solid ${S.orange}` : '1px solid #222', transition: 'all .15s',
           }}>
-            {isListening ? (
-              currentTone ? (
+            {listening ? (
+              detected ? (
                 <>
-                  <div style={{ fontSize: '11px', color: colors.dimText, marginBottom: '4px' }}>
-                    {currentTone.type}
-                  </div>
-                  <div style={{
-                    fontSize: '32px',
-                    fontWeight: 'bold',
-                    color: colors.orange,
-                    letterSpacing: '2px'
-                  }}>
-                    {currentTone.key}
-                  </div>
-                  <div style={{ fontSize: '11px', color: colors.dimText, marginTop: '4px' }}>
-                    {currentTone.freqs.map(f => f + 'Hz').join(' + ')}
-                  </div>
+                  <div style={{ fontSize: '.6rem', color: S.dim }}>{detected.type}</div>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: S.orange }}>{detected.key}</div>
+                  <div style={{ fontSize: '.6rem', color: S.dim }}>{detected.freqs.join(' + ')}Hz</div>
                 </>
-              ) : (
-                <div style={{ fontSize: '14px', color: colors.dimText }}>🎤 Listening...</div>
-              )
-            ) : (
-              <div style={{ fontSize: '14px', color: colors.dimText }}>Press LISTEN to start</div>
-            )}
+              ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>🎤 Listening...</div>
+            ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>Tap LISTEN to identify tones</div>}
           </div>
-
-          {/* Detected tones log */}
-          <div style={{
-            backgroundColor: '#000',
-            padding: '12px',
-            borderRadius: '2px',
-            maxHeight: '150px',
-            overflowY: 'auto',
-            fontSize: '11px',
-            fontFamily: 'monospace'
-          }}>
-            {detectedTones.length === 0 ? (
-              <div style={{ color: colors.dimText }}>No tones detected</div>
-            ) : (
-              detectedTones
-                .slice()
-                .reverse()
-                .slice(0, 20)
-                .map((t, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: '4px 0',
-                      borderBottom: '1px solid #222',
-                      display: 'flex',
-                      justifyContent: 'space-between'
-                    }}
-                  >
-                    <span>
-                      <span style={{ color: colors.orange, fontWeight: 'bold' }}>
-                        {t.type}
-                      </span>
-                      {' '}
-                      {t.key}
-                    </span>
-                    <span style={{ color: colors.dimText }}>
-                      {t.freqs.map(f => f + 'Hz').join('+')}
-                    </span>
-                  </div>
-                ))
-            )}
-          </div>
-        </div>
-
-        {/* TERMINAL LOG */}
-        <div style={{
-          backgroundColor: colors.panel,
-          padding: '12px 16px',
-          borderRadius: '4px',
-          borderLeft: `4px solid ${colors.accent}`
-        }}>
-          <button
-            onClick={() => setLogExpanded(!logExpanded)}
-            style={{
-              backgroundColor: 'transparent',
-              color: colors.dimText,
-              border: 'none',
-              padding: '0 0 8px 0',
-              fontSize: '10px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              marginBottom: logExpanded ? '8px' : '0',
-              width: '100%',
-              textTransform: 'uppercase'
-            }}
-          >
-            <ChevronDown
-              size={12}
-              style={{
-                transform: logExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                transition: 'transform 0.2s'
-              }}
-            />
-            Terminal [{terminalLog.length} events]
-          </button>
-          
-          {logExpanded && (
-            <div style={{
-              backgroundColor: '#000',
-              padding: '12px',
-              borderRadius: '2px',
-              maxHeight: '200px',
-              overflowY: 'auto',
-              fontSize: '10px',
-              fontFamily: 'monospace',
-              color: colors.dimText,
-              lineHeight: '1.4'
-            }}>
-              {terminalLog.slice(0, 50).map((line, i) => (
-                <div key={i}>{line}</div>
+          {detectedLog.length > 0 && (
+            <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '8px', fontSize: '.7rem' }}>
+              {detectedLog.map((t, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #111' }}>
+                  <span><span style={{ color: S.orange }}>{t.type}</span> {t.key}</span>
+                  <span style={{ color: S.dim }}>{t.freqs.join('+')}Hz</span>
+                </div>
               ))}
             </div>
           )}
-          {!logExpanded && (
-            <div style={{
-              fontSize: '10px',
-              fontFamily: 'monospace',
-              color: colors.dimText
-            }}>
-              {terminalLog[0]}
+        </div>
+
+        {/* Terminal Log (collapsible) */}
+        <div style={{ border: `1px solid ${S.border}`, borderRadius: '4px', overflow: 'hidden' }}>
+          <div onClick={() => setLogOpen(!logOpen)} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '8px 10px', cursor: 'pointer', background: S.panel,
+          }}>
+            <div style={{ fontSize: '.7rem', color: S.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+              {log[0] || 'Ready'}
+            </div>
+            {logOpen ? <ChevronUp size={14} color={S.dim}/> : <ChevronDown size={14} color={S.dim}/>}
+          </div>
+          {logOpen && (
+            <div style={{ background: '#000', padding: '8px 10px', maxHeight: '150px', overflowY: 'auto', fontSize: '.7rem' }}>
+              {log.map((l, i) => <div key={i} style={{ padding: '1px 0', color: i === 0 ? S.green : S.dim }}>{l}</div>)}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div style={{
-          textAlign: 'center',
-          fontSize: '10px',
-          color: colors.dimText,
-          marginTop: '16px',
-          textTransform: 'uppercase'
-        }}>
-          PhreakDialer • Educational Use Only
+        <div style={{ textAlign: 'center', fontSize: '.6rem', color: S.dim, padding: '12px 0', letterSpacing: '1px' }}>
+          PHREAKDIALER • EDUCATIONAL USE ONLY
         </div>
       </div>
     </div>
