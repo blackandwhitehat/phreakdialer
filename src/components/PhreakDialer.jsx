@@ -33,12 +33,14 @@ const PhreakDialer = () => {
   const [listening, setListening] = useState(false);
   const [detected, setDetected] = useState(null);
   const [detectedLog, setDetectedLog] = useState([]);
+  const [toneDur, setToneDur] = useState(200);
 
   const ctxRef = useRef(null);
   const oscsRef = useRef([]);
   const unlocked = useRef(false);
   const streamRef = useRef(null);
   const sustainRef = useRef(null);
+  const toneDurRef = useRef(200);
 
   // ── iOS Audio Unlock ──────────────────────────────────
   useEffect(() => {
@@ -98,7 +100,8 @@ const PhreakDialer = () => {
     oscsRef.current = [];
   };
 
-  const genTone = (freqs, duration = 200) => {
+  const genTone = (freqs, duration = null) => {
+    if (duration === null) duration = toneDurRef.current;
     const ctx = ensureCtx();
     stopAll();
     const now = ctx.currentTime;
@@ -158,19 +161,26 @@ const PhreakDialer = () => {
     }
   };
 
-  // 2600Hz sustain (hold to play)
+  // 2600Hz sustain (hold to play, release anywhere to stop)
   const start2600 = () => {
     genTone([2600], 0); // 0 = sustain
     sustainRef.current = true;
     addLog('SF 2600Hz ON');
-  };
-  const stop2600 = () => {
-    if (sustainRef.current) {
-      stopAll();
-      sustainRef.current = false;
-      setSeq(prev => prev + (prev ? ' ' : '') + '2600');
-      addLog('SF 2600Hz OFF');
-    }
+    // Listen on document so release works even if pointer leaves button
+    const release = () => {
+      if (sustainRef.current) {
+        stopAll();
+        sustainRef.current = false;
+        setSeq(prev => prev + (prev ? ' ' : '') + '2600');
+        addLog('SF 2600Hz OFF');
+      }
+      document.removeEventListener('mouseup', release);
+      document.removeEventListener('touchend', release);
+      document.removeEventListener('touchcancel', release);
+    };
+    document.addEventListener('mouseup', release);
+    document.addEventListener('touchend', release);
+    document.addEventListener('touchcancel', release);
   };
 
   // Play sequence
@@ -376,8 +386,8 @@ const PhreakDialer = () => {
           </span>
         </div>
 
-        {/* Mode Switcher */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {/* Mode Switcher + Duration */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center' }}>
           {['DTMF', 'MF'].map(m => (
             <button key={m} onClick={() => setMode(m)} style={{
               background: mode === m ? S.blue + '33' : 'transparent',
@@ -387,6 +397,13 @@ const PhreakDialer = () => {
               cursor: 'pointer', letterSpacing: '1px', borderRadius: '3px',
             }}>{m}</button>
           ))}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '.6rem', color: S.dim }}>{toneDur}ms</span>
+            <input type="range" min="50" max="1000" step="50" value={toneDur}
+              onChange={e => { const v = Number(e.target.value); setToneDur(v); toneDurRef.current = v; }}
+              style={{ width: '80px', accentColor: S.green, cursor: 'pointer' }}
+            />
+          </div>
         </div>
 
         {/* Sequence Buffer */}
@@ -440,9 +457,8 @@ const PhreakDialer = () => {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
             <Btn
-              onMouseDown={start2600} onMouseUp={stop2600}
+              onMouseDown={start2600}
               onTouchStart={e => { e.preventDefault(); start2600(); }}
-              onTouchEnd={e => { e.preventDefault(); stop2600(); }}
               color={S.orange} style={{ fontSize: '.75rem' }}
             >2600Hz</Btn>
             <Btn onClick={() => playSpecial('TRUNK', [2600, 2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>SEIZE</Btn>
