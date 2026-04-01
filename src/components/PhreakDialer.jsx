@@ -17,12 +17,101 @@ const MF = {
   'ST2':[1700,2200],'ST3':[1500,2200],
 };
 
-// ── Styles ──────────────────────────────────────
+// ── Cyberpunk Styles ────────────────────────────────────
 const S = {
-  bg: '#0a0a14', panel: '#0e0e1c', border: '#1a1a30',
+  bg: '#050510', panel: '#0a0a14', border: '#1a1a2e',
   green: '#00ff88', greenDim: 'rgba(0,255,136,.15)',
-  blue: '#0055ff', red: '#ff3333', orange: '#ff8800',
-  text: '#e0e0f0', dim: '#555570', mono: "'Share Tech Mono', 'Courier New', monospace",
+  cyan: '#00e5ff', pink: '#ff2d7b', orange: '#ff8800',
+  text: '#c0c0d0', dim: '#444460', mono: "'Share Tech Mono', 'Courier New', monospace",
+};
+
+// ── Matrix Rain Canvas Component (Switchboard) ──────────
+const MatrixRain = () => {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    const chars = 'ｦｧｨｩｪｫｬｭｮｯ01ｾｿ';
+    const cols = Math.floor(canvas.width / 15);
+    const drops = Array(cols).fill(0).map(() => Math.random() * canvas.height);
+    
+    const draw = () => {
+      ctx.fillStyle = 'rgba(5, 5, 16, 0.08)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#00ff8833';
+      ctx.font = '15px "Share Tech Mono"';
+      
+      for (let i = 0; i < cols; i++) {
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        ctx.fillText(char, i * 15, drops[i] * canvas.height);
+        drops[i] += 0.01;
+        if (drops[i] * canvas.height > canvas.height) drops[i] = 0;
+      }
+      requestAnimationFrame(draw);
+    };
+    draw();
+    
+    const handleResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
+  return <canvas ref={canvasRef} style={{ position: 'fixed', top: 0, left: 0, zIndex: 0, opacity: 0.5, pointerEvents: 'none' }} />;
+};
+
+// ── Boot Sequence Animation (Phantom) ──────────────────
+const BootSequence = ({ onComplete }) => {
+  const [messages, setMessages] = useState([]);
+  const bootMessages = [
+    'PHREAKDIALER v2.6',
+    'INITIALIZING AUDIO SUBSYSTEM... OK',
+    'LOADING FREQUENCY TABLES... OK',
+    'SCANNING TONE DETECTION WORKLET... OK',
+    'ENGAGING MATRIX OVERLAY... OK',
+    'CALIBRATING CRT SCANLINES... OK',
+    'READY FOR PHREAKING',
+  ];
+
+  useEffect(() => {
+    let idx = 0;
+    const interval = setInterval(() => {
+      if (idx < bootMessages.length) {
+        setMessages(prev => [...prev, bootMessages[idx]]);
+        idx++;
+      } else {
+        clearInterval(interval);
+        setTimeout(() => onComplete(), 600);
+      }
+    }, 120);
+    return () => clearInterval(interval);
+  }, [onComplete]);
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+      background: '#050510', zIndex: 1000, display: 'flex', flexDirection: 'column',
+      justifyContent: 'center', alignItems: 'center', fontFamily: "'Orbitron', monospace",
+      padding: '20px', color: '#00ff88',
+    }}>
+      <div style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '40px', letterSpacing: '2px' }}>
+        > PHREAKDIALER
+      </div>
+      <div style={{ maxWidth: '400px', fontSize: '.9rem', lineHeight: '2', fontFamily: S.mono }}>
+        {messages.map((msg, i) => (
+          <div key={i} style={{ animation: 'fadeInDown 0.4s ease-out' }}>
+            {msg}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 const PhreakDialer = () => {
@@ -34,6 +123,8 @@ const PhreakDialer = () => {
   const [detected, setDetected] = useState(null);
   const [detectedLog, setDetectedLog] = useState([]);
   const [toneDur, setToneDur] = useState(200);
+  const [bootComplete, setBootComplete] = useState(false);
+  const [toneFlash, setToneFlash] = useState(false);
 
   const ctxRef = useRef(null);
   const oscsRef = useRef([]);
@@ -147,10 +238,17 @@ const PhreakDialer = () => {
     if (navigator.vibrate) navigator.vibrate(10);
   };
 
+  // Detected tone flash effect (Phantom)
+  const triggerToneFlash = () => {
+    setToneFlash(true);
+    setTimeout(() => setToneFlash(false), 150);
+  };
+
   // Red box coin tones
   const playCoin = (coin) => {
     addLog(`RED BOX: ${coin}`);
     setSeq(prev => prev + (prev ? ' ' : '') + coin);
+    triggerToneFlash();
     if (navigator.vibrate) navigator.vibrate(10);
     if (coin === 'NICKEL') { genTone([2200], 66); }
     else if (coin === 'DIME') {
@@ -365,6 +463,7 @@ const PhreakDialer = () => {
             setDetected(tone);
             setDetectedLog(prev => [tone, ...prev.slice(0, 49)]);
             addLog(`Detected ${tone.type}: ${tone.key}`);
+            triggerToneFlash();
           } else if (!tone && fbHistory.every(h => h === null)) {
             lastKey = null;
             setDetected(null);
@@ -383,26 +482,36 @@ const PhreakDialer = () => {
     return () => { if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); };
   }, []);
 
-  // ── Button Component ──────────────────────────────────
-  const Btn = ({ children, onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, color = S.green, big, style: sx, ...rest }) => (
-    <button
-      onClick={onClick} onMouseDown={onMouseDown} onMouseUp={onMouseUp}
-      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
-      style={{
-        background: S.panel, border: `1px solid ${S.border}`, color,
-        fontFamily: S.mono, fontSize: big ? '1.2rem' : '.85rem', fontWeight: 'bold',
-        padding: big ? '14px' : '10px 12px', cursor: 'pointer', borderRadius: '4px',
-        transition: 'all .1s', userSelect: 'none', WebkitTapHighlightColor: 'transparent',
-        ...sx,
-      }}
-      onPointerDown={e => { e.currentTarget.style.background = color + '22'; e.currentTarget.style.borderColor = color; }}
-      onPointerUp={e => { e.currentTarget.style.background = S.panel; e.currentTarget.style.borderColor = S.border; }}
-      onPointerLeave={e => { e.currentTarget.style.background = S.panel; e.currentTarget.style.borderColor = S.border; }}
-      {...rest}
-    >
-      {children}
-    </button>
-  );
+  // ── Cyberpunk Button Component (Switchboard + Phantom) ──
+  const Btn = ({ children, onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, color = S.green, big, style: sx, ...rest }) => {
+    const [isPressed, setIsPressed] = useState(false);
+    return (
+      <button
+        onClick={onClick}
+        onMouseDown={(e) => { setIsPressed(true); onMouseDown?.(e); }}
+        onMouseUp={(e) => { setIsPressed(false); onMouseUp?.(e); }}
+        onTouchStart={(e) => { setIsPressed(true); onTouchStart?.(e); }}
+        onTouchEnd={(e) => { setIsPressed(false); onTouchEnd?.(e); }}
+        style={{
+          background: `linear-gradient(135deg, ${S.panel}, #0a0a14)`,
+          border: `1px solid ${color}44`, color,
+          fontFamily: S.mono, fontSize: big ? '1.2rem' : '.85rem', fontWeight: 'bold',
+          padding: big ? '14px' : '10px 12px', cursor: 'pointer', borderRadius: '3px',
+          transition: 'all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)', userSelect: 'none',
+          WebkitTapHighlightColor: 'transparent', textTransform: 'uppercase', letterSpacing: '0.5px',
+          boxShadow: `0 0 12px ${color}33, inset 0 0 8px ${color}11`,
+          animation: isPressed ? `buttonPress 0.2s ease-out` : 'none',
+          ...sx,
+        }}
+        onPointerDown={e => { e.currentTarget.style.boxShadow = `0 0 20px ${color}88, 0 0 30px ${color}44, inset 0 0 12px ${color}33`; }}
+        onPointerUp={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; }}
+        onPointerLeave={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; }}
+        {...rest}
+      >
+        {children}
+      </button>
+    );
+  };
 
   // ── Render ──────────────────────────────────
   const tbl = mode === 'DTMF' ? DTMF : MF;
@@ -410,129 +519,266 @@ const PhreakDialer = () => {
   const mfMain = ['1','2','3','4','5','6','7','8','9','11','0','12'];
   const mfSide = ['KP','KP2','ST','ST2','ST3'];
 
+  // Animations & Keyframes (Marcus + Phantom)
+  const animationStyles = `
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes neonGlow {
+      0%, 100% { text-shadow: 0 0 10px #00ff88, 0 0 20px #00ff8844; }
+      50% { text-shadow: 0 0 20px #00ff88, 0 0 40px #00ff8877, 0 0 60px #00ff8844; }
+    }
+    @keyframes glitch {
+      0%, 100% { clip-path: inset(0); }
+      20% { clip-path: inset(0 0 65% 0); }
+      40% { clip-path: inset(25% 0 58% 0); }
+      60% { clip-path: inset(54% 0 7% 0); }
+      80% { clip-path: inset(63% 0 12% 0); }
+    }
+    @keyframes buttonPress {
+      0% { transform: scale(1); }
+      50% { transform: scale(0.95); }
+      100% { transform: scale(1); }
+    }
+    @keyframes toneFlash {
+      0% { background: rgba(255, 45, 123, 0.4); }
+      100% { background: rgba(255, 45, 123, 0); }
+    }
+    @keyframes cursorBlink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    @keyframes fadeInStaggered {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  `;
+
   return (
-    <div style={{ background: S.bg, color: S.text, minHeight: '100vh', fontFamily: S.mono, padding: '12px' }}>
-      <div style={{ maxWidth: '480px', margin: '0 auto' }}>
+    <>
+      <style>{animationStyles}</style>
+      {!bootComplete && <BootSequence onComplete={() => setBootComplete(true)} />}
+      <MatrixRain />
+      
+      {/* CRT Scanlines Overlay (Switchboard) */}
+      <div style={{
+        position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+        backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,.15), rgba(0,0,0,.15) 1px, transparent 1px, transparent 2px)',
+        pointerEvents: 'none', zIndex: 100,
+      }} />
+      
+      {/* Tone Detection Flash (Phantom) */}
+      {toneFlash && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          animation: 'toneFlash 0.15s ease-out', pointerEvents: 'none', zIndex: 99,
+        }} />
+      )}
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0', borderBottom: `1px solid ${S.border}`, marginBottom: '12px' }}>
-          <Phone size={22} color={S.green} />
-          <span style={{ fontSize: '1.3rem', fontWeight: 'bold', letterSpacing: '3px' }}>
-            PHREAK<span style={{ color: S.green }}>DIALER</span>
-          </span>
-        </div>
+      <div style={{
+        background: S.bg, color: S.text, minHeight: '100vh', fontFamily: S.mono,
+        padding: '12px', position: 'relative', zIndex: 1,
+      }}>
+        <div style={{ maxWidth: '480px', margin: '0 auto' }}>
 
-        {/* Mode Switcher + Duration */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center' }}>
-          {['DTMF', 'MF'].map(m => (
-            <button key={m} onClick={() => setMode(m)} style={{
-              background: mode === m ? S.blue + '33' : 'transparent',
-              border: `1px solid ${mode === m ? S.blue : S.border}`,
-              color: mode === m ? '#fff' : S.dim, fontFamily: S.mono,
-              fontSize: '.75rem', fontWeight: 'bold', padding: '6px 16px',
-              cursor: 'pointer', letterSpacing: '1px', borderRadius: '3px',
-            }}>{m}</button>
-          ))}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '.6rem', color: S.dim }}>{toneDur}ms</span>
-            <input type="range" min="50" max="1000" step="50" value={toneDur}
-              onChange={e => { const v = Number(e.target.value); setToneDur(v); toneDurRef.current = v; }}
-              style={{ width: '80px', accentColor: S.green, cursor: 'pointer' }}
-            />
-          </div>
-        </div>
-
-        {/* Sequence Buffer */}
-        <div style={{ background: '#000', border: `1px solid ${S.border}`, borderRadius: '4px', padding: '10px 12px', marginBottom: '12px' }}>
-          <div style={{ fontSize: '.65rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px' }}>SEQUENCE</div>
-          <div style={{ fontSize: '1rem', fontWeight: 'bold', minHeight: '22px', color: seq ? '#fff' : S.dim, overflowX: 'auto', whiteSpace: 'nowrap' }}>
-            {seq || '[ EMPTY ]'}
-          </div>
-          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-            <Btn onClick={playSeq} color={S.green} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
-              <Play size={13}/> PLAY
-            </Btn>
-            <Btn onClick={() => { setSeq(''); addLog('Cleared'); }} color={S.dim} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
-              <X size={13}/> CLEAR
-            </Btn>
-            <Btn onClick={exportWAV} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
-              <Download size={13}/> WAV
-            </Btn>
-          </div>
-        </div>
-
-        {/* Dialpad */}
-        {mode === 'DTMF' ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '12px' }}>
-            {dtmfKeys.map(k => (
-              <Btn key={k} onClick={() => playTone(k)} big color={['A','B','C','D'].includes(k) ? S.blue : S.green}>{k}</Btn>
-            ))}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', flex: 3 }}>
-              {mfMain.map(k => (
-                <Btn key={k} onClick={() => playTone(k)} big>{k}</Btn>
-              ))}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
-              {mfSide.map(k => (
-                <Btn key={k} onClick={() => playTone(k)} color={S.blue} style={{ flex: 1, fontSize: '.7rem' }}>{k}</Btn>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Special Tones */}
-        <div style={{ border: `1px solid ${S.border}`, borderRadius: '4px', padding: '10px', marginBottom: '12px' }}>
-          <div style={{ fontSize: '.65rem', color: S.dim, marginBottom: '8px', letterSpacing: '1px' }}>SPECIAL TONES</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '8px' }}>
-            <Btn onClick={() => playCoin('NICKEL')} color={S.red}>5¢</Btn>
-            <Btn onClick={() => playCoin('DIME')} color={S.red}>10¢</Btn>
-            <Btn onClick={() => playCoin('QUARTER')} color={S.red}>25¢</Btn>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
-            <Btn
-              onMouseDown={start2600}
-              onTouchStart={e => { e.preventDefault(); start2600(); }}
-              color={S.orange} style={{ fontSize: '.75rem' }}
-            >2600Hz</Btn>
-            <Btn onClick={() => playSpecial('TRUNK', [2600, 2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>SEIZE</Btn>
-            <Btn onClick={() => playSpecial('CLEAR', [2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>CLEAR</Btn>
-          </div>
-        </div>
-
-        {/* Tone Listener */}
-        <div style={{ border: `1px solid ${listening ? S.orange : S.border}`, borderRadius: '4px', padding: '10px', marginBottom: '12px', transition: 'border-color .2s' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <div style={{ fontSize: '.65rem', color: S.dim, letterSpacing: '1px' }}>TONE LISTENER</div>
-            <Btn onClick={toggleListen} color={listening ? S.red : S.orange}
-              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 12px' }}>
-              {listening ? <><MicOff size={13}/> STOP</> : <><Mic size={13}/> LISTEN</>}
-            </Btn>
-          </div>
+          {/* Header with Neon Glow + Glitch (Phantom) */}
           <div style={{
-            background: '#000', borderRadius: '4px', padding: '12px', textAlign: 'center',
-            minHeight: '50px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            border: detected ? `1px solid ${S.orange}` : '1px solid #222', transition: 'all .15s',
+            display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0',
+            borderBottom: `1px solid ${S.border}`, marginBottom: '12px',
+            animation: 'fadeInStaggered 0.6s ease-out',
           }}>
-            {listening ? (
-              detected ? (
-                <>
-                  <div style={{ fontSize: '.6rem', color: S.dim }}>{detected.type}</div>
-                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: S.orange }}>{detected.key}</div>
-                  <div style={{ fontSize: '.6rem', color: S.dim }}>{detected.freqs.join(' + ')}Hz</div>
-                </>
-              ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>🎤 Listening...</div>
-            ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>Tap LISTEN to identify tones</div>}
+            <Phone size={22} color={S.green} style={{ filter: `drop-shadow(0 0 8px ${S.green})` }} />
+            <span style={{
+              fontSize: '1.3rem', fontWeight: '900', letterSpacing: '3px',
+              fontFamily: "'Orbitron', monospace", animation: 'neonGlow 2.5s ease-in-out infinite',
+            }}>
+              PHREAK<span style={{ color: S.green }}>DIALER</span>
+            </span>
           </div>
+
+          {/* Mode Switcher + Duration */}
+          <div style={{
+            display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center',
+            animation: 'fadeInStaggered 0.6s ease-out 0.1s backwards',
+          }}>
+            {['DTMF', 'MF'].map(m => (
+              <button key={m} onClick={() => setMode(m)} style={{
+                background: mode === m ? `linear-gradient(135deg, ${S.cyan}22, ${S.cyan}11)` : 'transparent',
+                border: `2px solid ${mode === m ? S.cyan : S.border}`,
+                color: mode === m ? S.cyan : S.dim, fontFamily: "'Orbitron', monospace",
+                fontSize: '.75rem', fontWeight: 'bold', padding: '6px 16px',
+                cursor: 'pointer', letterSpacing: '1px', borderRadius: '3px',
+                boxShadow: mode === m ? `0 0 12px ${S.cyan}44` : 'none',
+                transition: 'all 0.3s ease-out',
+              }}>{m}</button>
+            ))}
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '.6rem', color: S.dim, fontFamily: "'Orbitron', monospace" }}>{toneDur}ms</span>
+              <input type="range" min="50" max="1000" step="50" value={toneDur}
+                onChange={e => { const v = Number(e.target.value); setToneDur(v); toneDurRef.current = v; }}
+                style={{ width: '80px', accentColor: S.green, cursor: 'pointer' }}
+              />
+            </div>
+          </div>
+
+          {/* Section Divider (Marcus) */}
+          <div style={{
+            height: '1px', background: `linear-gradient(90deg, ${S.green}44, transparent)`,
+            margin: '12px 0', animation: 'fadeInStaggered 0.6s ease-out 0.2s backwards',
+          }} />
+
+          {/* Sequence Buffer */}
+          <div style={{
+            background: 'linear-gradient(135deg, #000, #050510)',
+            border: `1px solid ${S.green}33`, borderRadius: '4px', padding: '10px 12px',
+            marginBottom: '12px', animation: 'fadeInStaggered 0.6s ease-out 0.2s backwards',
+            boxShadow: `inset 0 0 12px ${S.green}11`,
+          }}>
+            <div style={{
+              fontSize: '.65rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px',
+              fontFamily: "'Orbitron', monospace",
+            }}>SEQUENCE</div>
+            <div style={{
+              fontSize: '1rem', fontWeight: 'bold', minHeight: '22px', color: seq ? S.green : S.dim,
+              overflowX: 'auto', whiteSpace: 'nowrap', letterSpacing: '1px',
+            }}>
+              {seq || '[ EMPTY ]'}{seq && <span style={{ animation: 'cursorBlink 1s step-end infinite' }}>▮</span>}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+              <Btn onClick={playSeq} color={S.green} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+                <Play size={13}/> PLAY
+              </Btn>
+              <Btn onClick={() => { setSeq(''); addLog('Cleared'); }} color={S.orange} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+                <X size={13}/> CLEAR
+              </Btn>
+              <Btn onClick={exportWAV} color={S.cyan} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+                <Download size={13}/> WAV
+              </Btn>
+            </div>
+          </div>
+
+          {/* Section Divider */}
+          <div style={{
+            height: '1px', background: `linear-gradient(90deg, ${S.green}44, transparent)`,
+            margin: '12px 0',
+          }} />
+
+          {/* Dialpad */}
+          <div style={{ animation: 'fadeInStaggered 0.6s ease-out 0.3s backwards' }}>
+            {mode === 'DTMF' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '12px' }}>
+                {dtmfKeys.map(k => (
+                  <Btn key={k} onClick={() => playTone(k)} big color={['A','B','C','D'].includes(k) ? S.cyan : S.green}>{k}</Btn>
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', flex: 3 }}>
+                  {mfMain.map(k => (
+                    <Btn key={k} onClick={() => playTone(k)} big color={S.green}>{k}</Btn>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
+                  {mfSide.map(k => (
+                    <Btn key={k} onClick={() => playTone(k)} color={S.cyan} style={{ flex: 1, fontSize: '.7rem' }}>{k}</Btn>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section Divider */}
+          <div style={{
+            height: '1px', background: `linear-gradient(90deg, ${S.pink}44, transparent)`,
+            margin: '12px 0',
+          }} />
+
+          {/* Special Tones */}
+          <div style={{
+            border: `1px solid ${S.pink}33`, borderRadius: '4px', padding: '10px',
+            marginBottom: '12px', background: 'linear-gradient(135deg, #050510, #0a0a14)',
+            boxShadow: `inset 0 0 12px ${S.pink}11`,
+            animation: 'fadeInStaggered 0.6s ease-out 0.4s backwards',
+          }}>
+            <div style={{
+              fontSize: '.65rem', color: S.dim, marginBottom: '8px', letterSpacing: '1px',
+              fontFamily: "'Orbitron', monospace",
+            }}>SPECIAL TONES</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '8px' }}>
+              <Btn onClick={() => playCoin('NICKEL')} color={S.pink}>5¢</Btn>
+              <Btn onClick={() => playCoin('DIME')} color={S.pink}>10¢</Btn>
+              <Btn onClick={() => playCoin('QUARTER')} color={S.pink}>25¢</Btn>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              <Btn
+                onMouseDown={start2600}
+                onTouchStart={e => { e.preventDefault(); start2600(); }}
+                color={S.orange} style={{ fontSize: '.75rem' }}
+              >2600Hz</Btn>
+              <Btn onClick={() => playSpecial('TRUNK', [2600, 2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>SEIZE</Btn>
+              <Btn onClick={() => playSpecial('CLEAR', [2400], 800)} color={S.orange} style={{ fontSize: '.7rem' }}>CLEAR</Btn>
+            </div>
+          </div>
+
+          {/* Section Divider */}
+          <div style={{
+            height: '1px', background: `linear-gradient(90deg, ${S.orange}44, transparent)`,
+            margin: '12px 0',
+          }} />
+
+          {/* Tone Listener */}
+          <div style={{
+            border: `1px solid ${listening ? S.orange : S.border}`, borderRadius: '4px', padding: '10px',
+            marginBottom: '12px', transition: 'border-color .2s', background: 'linear-gradient(135deg, #050510, #0a0a14)',
+            boxShadow: listening ? `inset 0 0 12px ${S.orange}11` : 'none',
+            animation: 'fadeInStaggered 0.6s ease-out 0.5s backwards',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{
+                fontSize: '.65rem', color: S.dim, letterSpacing: '1px',
+                fontFamily: "'Orbitron', monospace",
+              }}>TONE LISTENER</div>
+              <Btn onClick={toggleListen} color={listening ? S.red : S.orange}
+                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 12px' }}>
+                {listening ? <><MicOff size={13}/> STOP</> : <><Mic size={13}/> LISTEN</>}
+              </Btn>
+            </div>
+            <div style={{
+              background: 'linear-gradient(135deg, #000, #050510)', borderRadius: '4px', padding: '12px',
+              textAlign: 'center', minHeight: '50px', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center',
+              border: detected ? `2px solid ${S.orange}` : '1px solid #222', transition: 'all .15s',
+              boxShadow: detected ? `0 0 16px ${S.orange}33, inset 0 0 12px ${S.orange}11` : 'none',
+            }}>
+              {listening ? (
+                detected ? (
+                  <>
+                    <div style={{ fontSize: '.6rem', color: S.dim, fontFamily: "'Orbitron', monospace" }}>{detected.type}</div>
+                    <div style={{ fontSize: '2rem', fontWeight: 'bold', color: S.orange, fontFamily: "'Orbitron', monospace" }}>
+                      {detected.key}
+                    </div>
+                    <div style={{ fontSize: '.6rem', color: S.dim }}>{detected.freqs.join(' + ')}Hz</div>
+                  </>
+                ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>🎤 Listening...</div>
+              ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>Tap LISTEN to identify tones</div>}
+            </div>
           {/* Captured sequence display */}
           {detectedLog.length > 0 && (
             <>
               {/* Decoded string */}
-              <div style={{ background: '#000', border: '1px solid #222', borderRadius: '4px', padding: '8px 10px', marginTop: '8px' }}>
-                <div style={{ fontSize: '.6rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px' }}>CAPTURED SEQUENCE</div>
-                <div style={{ fontSize: '.9rem', fontWeight: 'bold', color: S.orange, wordBreak: 'break-all', letterSpacing: '2px' }}>
+              <div style={{
+                background: 'linear-gradient(135deg, #000, #050510)', border: `1px solid ${S.orange}33`,
+                borderRadius: '4px', padding: '8px 10px', marginTop: '8px', boxShadow: `inset 0 0 8px ${S.orange}11`,
+              }}>
+                <div style={{
+                  fontSize: '.6rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px',
+                  fontFamily: "'Orbitron', monospace",
+                }}>CAPTURED SEQUENCE</div>
+                <div style={{
+                  fontSize: '.9rem', fontWeight: 'bold', color: S.orange, wordBreak: 'break-all',
+                  letterSpacing: '2px', fontFamily: S.mono,
+                }}>
                   {detectedLog.slice().reverse().map(t => t.key).join(' ')}
                 </div>
               </div>
@@ -558,62 +804,91 @@ const PhreakDialer = () => {
                   const a = document.createElement('a'); a.href = url; a.download = 'phreakdialer_capture.txt'; a.click();
                   URL.revokeObjectURL(url);
                   addLog('Capture log exported');
-                }} color={S.dim} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                }} color={S.cyan} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
                   <Download size={12}/> SAVE LOG
                 </Btn>
                 <Btn onClick={() => {
                   const captured = detectedLog.slice().reverse().map(t => t.key).join(' ');
                   navigator.clipboard?.writeText(captured);
                   addLog('Sequence copied to clipboard');
-                }} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                }} color={S.cyan} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
                   <Copy size={12}/>
                 </Btn>
                 <Btn onClick={() => {
                   setDetectedLog([]);
                   setDetected(null);
                   addLog('Capture cleared');
-                }} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                }} color={S.orange} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
                   <RotateCcw size={12}/>
                 </Btn>
               </div>
 
               {/* Detailed log */}
-              <div style={{ maxHeight: '120px', overflowY: 'auto', marginTop: '8px', fontSize: '.7rem' }}>
+              <div style={{
+                maxHeight: '120px', overflowY: 'auto', marginTop: '8px', fontSize: '.7rem',
+                background: '#000', border: `1px solid ${S.dim}33`, borderRadius: '3px', padding: '6px',
+              }}>
                 {detectedLog.map((t, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #111' }}>
-                    <span><span style={{ color: S.orange }}>{t.type}</span> {t.key}</span>
+                    <span><span style={{ color: S.orange, fontFamily: "'Orbitron', monospace" }}>{t.type}</span> {t.key}</span>
                     <span style={{ color: S.dim }}>{t.freqs.join('+')}Hz</span>
                   </div>
                 ))}
               </div>
             </>
           )}
-        </div>
-
-        {/* Terminal Log (collapsible) */}
-        <div style={{ border: `1px solid ${S.border}`, borderRadius: '4px', overflow: 'hidden' }}>
-          <div onClick={() => setLogOpen(!logOpen)} style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '8px 10px', cursor: 'pointer', background: S.panel,
-          }}>
-            <div style={{ fontSize: '.7rem', color: S.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-              {log[0] || 'Ready'}
-            </div>
-            {logOpen ? <ChevronUp size={14} color={S.dim}/> : <ChevronDown size={14} color={S.dim}/>}
           </div>
-          {logOpen && (
-            <div style={{ background: '#000', padding: '8px 10px', maxHeight: '150px', overflowY: 'auto', fontSize: '.7rem' }}>
-              {log.map((l, i) => <div key={i} style={{ padding: '1px 0', color: i === 0 ? S.green : S.dim }}>{l}</div>)}
-            </div>
-          )}
-        </div>
 
-        {/* Footer */}
-        <div style={{ textAlign: 'center', fontSize: '.6rem', color: S.dim, padding: '12px 0', letterSpacing: '1px' }}>
-          PHREAKDIALER • EDUCATIONAL USE ONLY
+          {/* Section Divider */}
+          <div style={{
+            height: '1px', background: `linear-gradient(90deg, ${S.dim}44, transparent)`,
+            margin: '12px 0',
+          }} />
+
+          {/* Terminal Log (collapsible) */}
+          <div style={{
+            border: `1px solid ${S.border}`, borderRadius: '4px', overflow: 'hidden',
+            animation: 'fadeInStaggered 0.6s ease-out 0.6s backwards',
+            background: 'linear-gradient(135deg, #050510, #0a0a14)',
+          }}>
+            <div onClick={() => setLogOpen(!logOpen)} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '8px 10px', cursor: 'pointer', background: S.panel,
+              transition: 'all 0.2s ease-out',
+            }}>
+              <div style={{
+                fontSize: '.7rem', color: S.dim, overflow: 'hidden', textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap', flex: 1, fontFamily: S.mono,
+              }}>
+                {log[0] || 'Ready'}
+              </div>
+              {logOpen ? <ChevronUp size={14} color={S.dim}/> : <ChevronDown size={14} color={S.dim}/>}
+            </div>
+            {logOpen && (
+              <div style={{
+                background: '#000', padding: '8px 10px', maxHeight: '150px', overflowY: 'auto',
+                fontSize: '.7rem', borderTop: `1px solid ${S.border}`,
+              }}>
+                {log.map((l, i) => (
+                  <div key={i} style={{ padding: '1px 0', color: i === 0 ? S.green : S.dim, fontFamily: S.mono }}>
+                    {l}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            textAlign: 'center', fontSize: '.6rem', color: S.dim, padding: '12px 0',
+            letterSpacing: '1px', fontFamily: "'Orbitron', monospace",
+            animation: 'fadeInStaggered 0.6s ease-out 0.7s backwards',
+          }}>
+            PHREAKDIALER • EDUCATIONAL USE ONLY
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
