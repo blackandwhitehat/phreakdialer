@@ -11,25 +11,37 @@ const PhreakDialer = () => {
   const audioContextRef = useRef(null);
   const oscillatorsRef = useRef([]);
 
-  // Initialize audio on component mount
-  useEffect(() => {
-    const handleInitAudio = () => {
+  // Initialize audio context lazily and resume (iOS Safari fix)
+  const ensureAudioContext = async () => {
+    if (!audioContextRef.current) {
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!audioContextRef.current) {
-          audioContextRef.current = new AudioContext();
-          logMessage("Audio system initialized");
-        }
+        audioContextRef.current = new AudioContext();
+        logMessage("Audio system initialized");
       } catch (e) {
         logMessage("Audio initialization failed: " + e.message);
+        return false;
       }
-    };
+    }
     
-    // Add click listener to initialize audio (browser requirement)
-    document.addEventListener('click', handleInitAudio, { once: true });
+    // Always resume the audio context (iOS Safari requirement)
+    // This is safe to call on already-playing contexts
+    if (audioContextRef.current.state === 'suspended') {
+      try {
+        await audioContextRef.current.resume();
+        logMessage("Audio context resumed");
+      } catch (e) {
+        logMessage("Audio resume failed: " + e.message);
+        return false;
+      }
+    }
     
+    return true;
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
     return () => {
-      document.removeEventListener('click', handleInitAudio);
       stopAllTones();
     };
   }, []);
@@ -61,29 +73,45 @@ const PhreakDialer = () => {
     }
   };
 
-  // Generate audio tone
-  const generateTone = (frequencies, duration = 300) => {
-    if (!audioContextRef.current) {
-      logMessage("Audio not initialized. Click somewhere on the page first.");
+  // Generate audio tone with envelope shaping
+  const generateTone = async (frequencies, duration = 300) => {
+    // Ensure audio context is initialized and resumed (iOS Safari fix)
+    const ready = await ensureAudioContext();
+    if (!ready) {
+      logMessage("Audio context not available");
       return;
     }
     
     // Stop any currently playing tones
     stopAllTones();
     
-    // Create gain node
-    const gainNode = audioContextRef.current.createGain();
-    gainNode.gain.value = 0.5;
-    gainNode.connect(audioContextRef.current.destination);
+    const ctx = audioContextRef.current;
+    const now = ctx.currentTime;
+    
+    // Create gain node for envelope shaping
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0;  // Start at 0 to prevent clicks
+    gainNode.connect(ctx.destination);
+    
+    // Attack: ramp up to 0.5 over 10ms to prevent clicks
+    gainNode.gain.linearRampToValueAtTime(0.5, now + 0.01);
+    
+    // Release: ramp down to 0 for last 10ms to prevent pops
+    if (duration) {
+      const releaseDuration = 0.01;
+      const toneDuration = duration / 1000;
+      gainNode.gain.setValueAtTime(0.5, now + toneDuration - releaseDuration);
+      gainNode.gain.linearRampToValueAtTime(0, now + toneDuration);
+    }
     
     // Create oscillators for each frequency
     const newOscillators = [];
     frequencies.forEach(freq => {
-      const osc = audioContextRef.current.createOscillator();
+      const osc = ctx.createOscillator();
       osc.type = 'sine';
       osc.frequency.value = freq;
       osc.connect(gainNode);
-      osc.start();
+      osc.start(now);
       newOscillators.push(osc);
     });
     
@@ -109,6 +137,144 @@ const PhreakDialer = () => {
       }
     });
     oscillatorsRef.current = [];
+  };
+
+  // Export sequence as real WAV file using OfflineAudioContext
+  const exportSequenceAsWAV = async () => {
+    if (!toneSequence) {
+      logMessage("No sequence to export");
+      return;
+    }
+
+    logMessage("Rendering sequence to WAV...");
+
+    try {
+      // Parse the tone sequence
+      const toneArray = toneSequence.split(' ');
+      
+      // Calculate total duration: 300ms per tone + 200ms gap = 500ms per tone
+      const toneDuration = 0.3;  // 300ms
+      const gapDuration = 0.2;   // 200ms
+      const totalDuration = toneArray.length * (toneDuration + gapDuration);
+      
+      // Create OfflineAudioContext (sample rate 44100 Hz, stereo, duration)
+      const sampleRate = 44100;
+      const channels = 1;  // Mono
+      const offlineCtx = new OfflineAudioContext(channels, Math.ceil(sampleRate * totalDuration), sampleRate);
+      
+      let currentTime = 0;
+      
+      // Generate all tones in the sequence
+      toneArray.forEach(tone => {
+        let frequencies = null;
+        
+        if (tone === '2600') {
+          frequencies = tones.sf['2600'];
+        } else if (selectedSystem === 'DTMF' && tones.dtmf[tone]) {
+          frequencies = tones.dtmf[tone];
+        } else if (selectedSystem === 'MF' && tones.mf[tone]) {
+          frequencies = tones.mf[tone];
+        } else if (tone === 'NICKEL') {
+          frequencies = [2200];
+        } else if (tone === 'DIME') {
+          frequencies = [2200];
+        } else if (tone === 'QUARTER') {
+          frequencies = [2200];
+        }
+        
+        if (frequencies) {
+          // Create gain node for this tone with envelope
+          const gainNode = offlineCtx.createGain();
+          gainNode.gain.setValueAtTime(0, currentTime);
+          gainNode.gain.linearRampToValueAtTime(0.5, currentTime + 0.01);
+          gainNode.gain.setValueAtTime(0.5, currentTime + toneDuration - 0.01);
+          gainNode.gain.linearRampToValueAtTime(0, currentTime + toneDuration);
+          gainNode.connect(offlineCtx.destination);
+          
+          // Create oscillators for each frequency
+          frequencies.forEach(freq => {
+            const osc = offlineCtx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            osc.connect(gainNode);
+            osc.start(currentTime);
+            osc.stop(currentTime + toneDuration);
+          });
+        }
+        
+        currentTime += toneDuration + gapDuration;
+      });
+      
+      // Render the audio
+      const audioBuffer = await offlineCtx.startRendering();
+      
+      // Convert AudioBuffer to WAV
+      const wavBlob = await audioBufferToWAV(audioBuffer);
+      
+      // Download the WAV file
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(wavBlob);
+      link.download = 'phreakdialer_sequence.wav';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      logMessage("Sequence exported as phreakdialer_sequence.wav");
+    } catch (e) {
+      logMessage("WAV export failed: " + e.message);
+    }
+  };
+
+  // Helper function: Convert AudioBuffer to WAV format (PCM 16-bit)
+  const audioBufferToWAV = async (audioBuffer) => {
+    const numberOfChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numberOfChannels * bytesPerSample;
+
+    // Calculate WAV file size
+    const dataLength = audioBuffer.length * blockAlign;
+    const fileLength = 36 + dataLength;
+
+    // Create ArrayBuffer for WAV file
+    const arrayBuffer = new ArrayBuffer(44 + dataLength);
+    const view = new DataView(arrayBuffer);
+
+    // WAV header
+    const writeString = (offset, string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, fileLength, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // fmt chunk size
+    view.setUint16(20, format, true); // format code
+    view.setUint16(22, numberOfChannels, true); // number of channels
+    view.setUint32(24, sampleRate, true); // sample rate
+    view.setUint32(28, sampleRate * blockAlign, true); // byte rate
+    view.setUint16(32, blockAlign, true); // block align
+    view.setUint16(34, bitDepth, true); // bits per sample
+
+    writeString(36, 'data');
+    view.setUint32(40, dataLength, true);
+
+    // Convert float samples to PCM 16-bit
+    const channelData = audioBuffer.getChannelData(0);
+    let offset = 44;
+    for (let i = 0; i < audioBuffer.length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i])); // clamp
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
   };
 
   // Simple log to console
@@ -802,28 +968,7 @@ const PhreakDialer = () => {
                   EXPORT OPTIONS
                 </div>
                 <button
-                  onClick={() => {
-                    logMessage("Exporting sequence as WAV file");
-                    
-                    // Create a simple "beep" audio to simulate a download
-                    if (audioContextRef.current) {
-                      generateTone([440, 880], 300);
-                      
-                      // Create a fake download after the beep
-                      setTimeout(() => {
-                        logMessage("Sequence exported as phreakdialer_sequence.wav");
-                        
-                        // Create a dummy download
-                        const link = document.createElement('a');
-                        const blob = new Blob(['Dummy WAV file'], { type: 'audio/wav' });
-                        link.href = URL.createObjectURL(blob);
-                        link.download = 'phreakdialer_sequence.wav';
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      }, 500);
-                    }
-                  }}
+                  onClick={exportSequenceAsWAV}
                   style={{
                     backgroundColor: purpleStyle.specialButton,
                     color: purpleStyle.text,
