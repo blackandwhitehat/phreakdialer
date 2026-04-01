@@ -1,81 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Phone, Monitor, Terminal, Wrench, Play, Mic, MicOff } from 'lucide-react';
+import { Phone, Play, Mic, Zap, ChevronDown } from 'lucide-react';
 
 const PhreakDialer = () => {
-  const [activeTab, setActiveTab] = useState('blueBox');
+  // State
+  const [mode, setMode] = useState('DTMF'); // DTMF or MF
   const [toneSequence, setToneSequence] = useState('');
-  const [output, setOutput] = useState('PhreakDialer initialized');
-  const [selectedSystem, setSelectedSystem] = useState('DTMF');
   const [isListening, setIsListening] = useState(false);
   const [detectedTones, setDetectedTones] = useState([]);
   const [currentTone, setCurrentTone] = useState(null);
+  const [terminalLog, setTerminalLog] = useState(['PhreakDialer initialized']);
+  const [logExpanded, setLogExpanded] = useState(false);
   
-  // Audio context and oscillators
+  // Audio refs
   const audioContextRef = useRef(null);
   const oscillatorsRef = useRef([]);
   const micStreamRef = useRef(null);
   const analyserRef = useRef(null);
   const listenerFrameRef = useRef(null);
-
   const audioUnlockedRef = useRef(false);
-
-  // iOS Safari nuclear unlock: play a silent buffer via native touchstart event.
-  // React synthetic events don't always count as "user gestures" on iOS Safari.
-  // This native handler fires BEFORE React's onClick and unlocks the AudioContext.
-  useEffect(() => {
-    const unlockAudio = () => {
-      if (audioUnlockedRef.current) return;
-      try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!audioContextRef.current) {
-          audioContextRef.current = new AudioContext();
-        }
-        const ctx = audioContextRef.current;
-        // Resume if suspended
-        if (ctx.state === 'suspended') ctx.resume();
-        // Play a silent buffer — this is THE iOS Safari unlock trick.
-        // iOS requires an AudioBufferSourceNode.start() in a user gesture.
-        const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.connect(ctx.destination);
-        src.start(0);
-        src.onended = () => {
-          audioUnlockedRef.current = true;
-          logMessage("Audio unlocked (iOS)");
-        };
-        // Also mark as unlocked immediately for non-iOS
-        audioUnlockedRef.current = true;
-      } catch (e) {
-        // Silently fail, will retry on next touch
-      }
-    };
-    // Use native touchstart + mousedown — fires before React synthetic events
-    document.addEventListener('touchstart', unlockAudio, { once: false, passive: true });
-    document.addEventListener('mousedown', unlockAudio, { once: false, passive: true });
-    return () => {
-      document.removeEventListener('touchstart', unlockAudio);
-      document.removeEventListener('mousedown', unlockAudio);
-      stopAllTones();
-    };
-  }, []);
-
-  // Ensure audio context exists and is running
-  const ensureAudioContext = () => {
-    if (!audioContextRef.current) {
-      try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioContextRef.current = new AudioContext();
-      } catch (e) {
-        logMessage("Audio initialization failed: " + e.message);
-        return false;
-      }
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-    return true;
-  };
 
   // Tone definitions
   const tones = {
@@ -89,53 +31,101 @@ const PhreakDialer = () => {
       '1': [700, 900], '2': [700, 1100], '3': [900, 1100],
       '4': [700, 1300], '5': [900, 1300], '6': [1100, 1300],
       '7': [700, 1500], '8': [900, 1500], '9': [1100, 1500],
-      '0': [1300, 1500], 
+      '0': [1300, 1500],
       '11': [700, 1700], '12': [900, 1700],
       'KP': [1100, 1700], 'ST': [1500, 1700],
       'KP2': [1300, 1700], 'ST2': [1700, 2200], 'ST3': [1500, 2200]
     },
-    sf: {
-      '2600': [2600]
-    },
-    redBox: {
+    special: {
+      'SF2600': [2600],
       'NICKEL': [2200],
-      'DIME': [2200, 2200],
-      'QUARTER': [2200, 2200, 2200, 2200, 2200]
+      'DIME': [2200],
+      'QUARTER': [2200],
+      'TRUNK_SEIZE': [2600, 2400],
+      'TRUNK_CLEAR': [2400]
     }
   };
 
-  // Generate audio tone with envelope shaping — synchronous for iOS Safari
-  const generateTone = (frequencies, duration = 300) => {
-    // Ensure audio context is initialized and resumed (iOS Safari fix)
-    const ready = ensureAudioContext();
-    if (!ready) {
-      logMessage("Audio context not available");
-      return;
-    }
+  // Log helper
+  const logMessage = (msg) => {
+    const time = new Date().toLocaleTimeString();
+    setTerminalLog(prev => [`[${time}] ${msg}`, ...prev].slice(0, 100));
+  };
+
+  // iOS Safari audio unlock
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (audioUnlockedRef.current) return;
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!audioContextRef.current) {
+          audioContextRef.current = new AudioContext();
+        }
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') ctx.resume();
+        const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        audioUnlockedRef.current = true;
+      } catch (e) {
+        // Silent
+      }
+    };
     
-    // Stop any currently playing tones
+    document.addEventListener('touchstart', unlockAudio, { once: false, passive: true });
+    document.addEventListener('mousedown', unlockAudio, { once: false, passive: true });
+    
+    return () => {
+      document.removeEventListener('touchstart', unlockAudio);
+      document.removeEventListener('mousedown', unlockAudio);
+      stopAllTones();
+    };
+  }, []);
+
+  // Ensure audio context
+  const ensureAudioContext = () => {
+    if (!audioContextRef.current) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContextRef.current = new AudioContext();
+      } catch (e) {
+        logMessage('Audio initialization failed');
+        return false;
+      }
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    return true;
+  };
+
+  // Generate tone with envelope shaping
+  const generateTone = (frequencies, duration = 300) => {
+    if (!ensureAudioContext()) return;
+    
     stopAllTones();
     
     const ctx = audioContextRef.current;
     const now = ctx.currentTime;
     
-    // Create gain node for envelope shaping
+    // Gain node with envelope
     const gainNode = ctx.createGain();
-    gainNode.gain.value = 0;  // Start at 0 to prevent clicks
+    gainNode.gain.value = 0;
     gainNode.connect(ctx.destination);
     
-    // Attack: ramp up to 0.5 over 10ms to prevent clicks
+    // Attack: 10ms
     gainNode.gain.linearRampToValueAtTime(0.5, now + 0.01);
     
-    // Release: ramp down to 0 for last 10ms to prevent pops
+    // Release: 10ms at the end
     if (duration) {
-      const releaseDuration = 0.01;
       const toneDuration = duration / 1000;
-      gainNode.gain.setValueAtTime(0.5, now + toneDuration - releaseDuration);
+      gainNode.gain.setValueAtTime(0.5, now + toneDuration - 0.01);
       gainNode.gain.linearRampToValueAtTime(0, now + toneDuration);
     }
     
-    // Create oscillators for each frequency
+    // Create oscillators
     const newOscillators = [];
     frequencies.forEach(freq => {
       const osc = ctx.createOscillator();
@@ -146,14 +136,10 @@ const PhreakDialer = () => {
       newOscillators.push(osc);
     });
     
-    // Store oscillators
     oscillatorsRef.current = newOscillators;
     
-    // Stop after duration
     if (duration) {
-      setTimeout(() => {
-        stopAllTones();
-      }, duration);
+      setTimeout(() => stopAllTones(), duration);
     }
   };
 
@@ -164,204 +150,85 @@ const PhreakDialer = () => {
         osc.stop();
         osc.disconnect();
       } catch (e) {
-        // Oscillator may have already been stopped
+        // Already stopped
       }
     });
     oscillatorsRef.current = [];
   };
 
-  // Export sequence as real WAV file using OfflineAudioContext
-  const exportSequenceAsWAV = async () => {
-    if (!toneSequence) {
-      logMessage("No sequence to export");
-      return;
-    }
-
-    logMessage("Rendering sequence to WAV...");
-
-    try {
-      // Parse the tone sequence
-      const toneArray = toneSequence.split(' ');
-      
-      // Calculate total duration: 300ms per tone + 200ms gap = 500ms per tone
-      const toneDuration = 0.3;  // 300ms
-      const gapDuration = 0.2;   // 200ms
-      const totalDuration = toneArray.length * (toneDuration + gapDuration);
-      
-      // Create OfflineAudioContext (sample rate 44100 Hz, stereo, duration)
-      const sampleRate = 44100;
-      const channels = 1;  // Mono
-      const offlineCtx = new OfflineAudioContext(channels, Math.ceil(sampleRate * totalDuration), sampleRate);
-      
-      let currentTime = 0;
-      
-      // Generate all tones in the sequence
-      toneArray.forEach(tone => {
-        let frequencies = null;
-        
-        if (tone === '2600') {
-          frequencies = tones.sf['2600'];
-        } else if (selectedSystem === 'DTMF' && tones.dtmf[tone]) {
-          frequencies = tones.dtmf[tone];
-        } else if (selectedSystem === 'MF' && tones.mf[tone]) {
-          frequencies = tones.mf[tone];
-        } else if (tone === 'NICKEL') {
-          frequencies = [2200];
-        } else if (tone === 'DIME') {
-          frequencies = [2200];
-        } else if (tone === 'QUARTER') {
-          frequencies = [2200];
-        }
-        
-        if (frequencies) {
-          // Create gain node for this tone with envelope
-          const gainNode = offlineCtx.createGain();
-          gainNode.gain.setValueAtTime(0, currentTime);
-          gainNode.gain.linearRampToValueAtTime(0.5, currentTime + 0.01);
-          gainNode.gain.setValueAtTime(0.5, currentTime + toneDuration - 0.01);
-          gainNode.gain.linearRampToValueAtTime(0, currentTime + toneDuration);
-          gainNode.connect(offlineCtx.destination);
-          
-          // Create oscillators for each frequency
-          frequencies.forEach(freq => {
-            const osc = offlineCtx.createOscillator();
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-            osc.connect(gainNode);
-            osc.start(currentTime);
-            osc.stop(currentTime + toneDuration);
-          });
-        }
-        
-        currentTime += toneDuration + gapDuration;
-      });
-      
-      // Render the audio
-      const audioBuffer = await offlineCtx.startRendering();
-      
-      // Convert AudioBuffer to WAV
-      const wavBlob = await audioBufferToWAV(audioBuffer);
-      
-      // Download the WAV file
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(wavBlob);
-      link.download = 'phreakdialer_sequence.wav';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      logMessage("Sequence exported as phreakdialer_sequence.wav");
-    } catch (e) {
-      logMessage("WAV export failed: " + e.message);
-    }
+  // 2600Hz special handling: hold to play
+  const handle2600MouseDown = () => {
+    if (!ensureAudioContext()) return;
+    stopAllTones();
+    
+    const ctx = audioContextRef.current;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0.5;
+    gainNode.connect(ctx.destination);
+    
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 2600;
+    osc.connect(gainNode);
+    osc.start(ctx.currentTime);
+    
+    oscillatorsRef.current = [osc];
+    logMessage('2600Hz tone started (hold)');
+    
+    if (navigator.vibrate) navigator.vibrate(10);
   };
 
-  // Helper function: Convert AudioBuffer to WAV format (PCM 16-bit)
-  const audioBufferToWAV = async (audioBuffer) => {
-    const numberOfChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const format = 1; // PCM
-    const bitDepth = 16;
-
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numberOfChannels * bytesPerSample;
-
-    // Calculate WAV file size
-    const dataLength = audioBuffer.length * blockAlign;
-    const fileLength = 36 + dataLength;
-
-    // Create ArrayBuffer for WAV file
-    const arrayBuffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(arrayBuffer);
-
-    // WAV header
-    const writeString = (offset, string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
-    };
-
-    writeString(0, 'RIFF');
-    view.setUint32(4, fileLength, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true); // fmt chunk size
-    view.setUint16(20, format, true); // format code
-    view.setUint16(22, numberOfChannels, true); // number of channels
-    view.setUint32(24, sampleRate, true); // sample rate
-    view.setUint32(28, sampleRate * blockAlign, true); // byte rate
-    view.setUint16(32, blockAlign, true); // block align
-    view.setUint16(34, bitDepth, true); // bits per sample
-
-    writeString(36, 'data');
-    view.setUint32(40, dataLength, true);
-
-    // Convert float samples to PCM 16-bit
-    const channelData = audioBuffer.getChannelData(0);
-    let offset = 44;
-    for (let i = 0; i < audioBuffer.length; i++) {
-      const sample = Math.max(-1, Math.min(1, channelData[i])); // clamp
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-      offset += 2;
-    }
-
-    return new Blob([arrayBuffer], { type: 'audio/wav' });
-  };
-
-  // Simple log to console
-  const logMessage = (message) => {
-    const time = new Date().toLocaleTimeString();
-    setOutput(prev => `[${time}] ${message}\n${prev}`);
+  const handle2600MouseUp = () => {
+    stopAllTones();
+    logMessage('2600Hz tone released');
   };
 
   // Play tone
   const playTone = (tone) => {
-    let toneSet;
     let frequencies;
     
-    if (tone === '2600') {
-      frequencies = tones.sf['2600'];
-      logMessage(`Playing 2600Hz tone`);
-    } else if (selectedSystem === 'DTMF' && tones.dtmf[tone]) {
+    if (mode === 'DTMF' && tones.dtmf[tone]) {
       frequencies = tones.dtmf[tone];
-      logMessage(`Playing DTMF tone: ${tone}`);
-    } else if (selectedSystem === 'MF' && tones.mf[tone]) {
+      logMessage(`DTMF: ${tone}`);
+    } else if (mode === 'MF' && tones.mf[tone]) {
       frequencies = tones.mf[tone];
-      logMessage(`Playing MF tone: ${tone}`);
-    } else if (['NICKEL', 'DIME', 'QUARTER'].includes(tone)) {
-      playRedboxTone(tone);
-      return;
+      logMessage(`MF: ${tone}`);
     } else {
-      logMessage(`Unknown tone: ${tone}`);
       return;
     }
     
-    if (frequencies) {
-      generateTone(frequencies);
-      setToneSequence(prev => prev + (prev ? ' ' : '') + tone);
-    }
-  };
-  
-  // Special handling for redbox tones
-  const playRedboxTone = (coin) => {
-    logMessage(`Simulating ${coin} deposit...`);
-    setToneSequence(prev => prev + (prev ? ' ' : '') + coin);
+    generateTone(frequencies);
+    setToneSequence(prev => prev + (prev ? ' ' : '') + tone);
     
-    switch (coin) {
-      case 'NICKEL':
-        generateTone([2200], 66);
-        break;
-      case 'DIME':
-        generateTone([2200], 66);
-        setTimeout(() => generateTone([2200], 66), 132);
-        break;
-      case 'QUARTER':
-        // 5 pulses for a quarter
-        for (let i = 0; i < 5; i++) {
-          setTimeout(() => generateTone([2200], 33), i * 66);
-        }
-        break;
+    if (navigator.vibrate) navigator.vibrate(10);
+  };
+
+  // Special tones
+  const playSpecialTone = (toneName, label) => {
+    const frequencies = tones.special[toneName];
+    if (!frequencies) return;
+    
+    let duration = 300;
+    if (toneName === 'NICKEL') {
+      generateTone([2200], 66);
+      duration = 66;
+    } else if (toneName === 'DIME') {
+      generateTone([2200], 66);
+      setTimeout(() => generateTone([2200], 66), 132);
+      duration = 264;
+    } else if (toneName === 'QUARTER') {
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => generateTone([2200], 33), i * 66);
+      }
+      duration = 330;
+    } else {
+      generateTone(frequencies, duration);
     }
+    
+    logMessage(label);
+    setToneSequence(prev => prev + (prev ? ' ' : '') + label);
+    
+    if (navigator.vibrate) navigator.vibrate(10);
   };
 
   // Play sequence
@@ -371,55 +238,38 @@ const PhreakDialer = () => {
       return;
     }
     
-    // Disable the play button during playback
-    const playButton = document.getElementById('play-sequence-button');
-    if (playButton) {
-      playButton.disabled = true;
-      playButton.style.opacity = '0.5';
-    }
+    logMessage(`Playing: ${toneSequence}`);
     
-    logMessage(`Playing sequence: ${toneSequence}`);
-    
-    // Parse the sequence and play each tone with a delay
     const toneArray = toneSequence.split(' ');
-    let totalDuration = 0;
     
     toneArray.forEach((tone, index) => {
       setTimeout(() => {
-        // Just play the tone without adding to sequence
-        if (['NICKEL', 'DIME', 'QUARTER'].includes(tone)) {
-          // Special handling for redbox tones
-          if (tone === 'NICKEL') {
-            generateTone([2200], 66);
-          } else if (tone === 'DIME') {
-            generateTone([2200], 66);
-            setTimeout(() => generateTone([2200], 66), 132);
-          } else if (tone === 'QUARTER') {
-            for (let i = 0; i < 5; i++) {
-              setTimeout(() => generateTone([2200], 33), i * 66);
-            }
+        let frequencies;
+        
+        if (tone === 'SF2600') {
+          frequencies = tones.special['SF2600'];
+        } else if (tone === 'NICKEL') {
+          generateTone([2200], 66);
+          return;
+        } else if (tone === 'DIME') {
+          generateTone([2200], 66);
+          setTimeout(() => generateTone([2200], 66), 132);
+          return;
+        } else if (tone === 'QUARTER') {
+          for (let i = 0; i < 5; i++) {
+            setTimeout(() => generateTone([2200], 33), i * 66);
           }
-        } else if (tone === '2600') {
-          generateTone(tones.sf['2600']);
-        } else if (selectedSystem === 'DTMF' && tones.dtmf[tone]) {
-          generateTone(tones.dtmf[tone]);
-        } else if (selectedSystem === 'MF' && tones.mf[tone]) {
-          generateTone(tones.mf[tone]);
+          return;
+        } else if (tones.dtmf[tone]) {
+          frequencies = tones.dtmf[tone];
+        } else if (tones.mf[tone]) {
+          frequencies = tones.mf[tone];
+        } else {
+          return;
         }
         
-        // If this is the last tone, re-enable the play button after it finishes
-        if (index === toneArray.length - 1) {
-          setTimeout(() => {
-            if (playButton) {
-              playButton.disabled = false;
-              playButton.style.opacity = '1';
-            }
-            logMessage("Sequence playback complete");
-          }, 500); // Wait for the last tone to finish
-        }
+        if (frequencies) generateTone(frequencies);
       }, index * 500);
-      
-      totalDuration = (index + 1) * 500;
     });
   };
 
@@ -429,23 +279,14 @@ const PhreakDialer = () => {
     logMessage('Sequence cleared');
   };
 
-  // ── TONE LISTENER (Goertzel algorithm) ──────────────────────────
-
-  // All frequencies we want to detect
+  // Goertzel algorithm
   const TARGET_FREQS = [
-    // DTMF rows
     697, 770, 852, 941,
-    // DTMF columns
     1209, 1336, 1477, 1633,
-    // MF frequencies
-    700, 900, 1100, 1300, 1500, 1700, 2200,
-    // SF
-    2600,
-    // CCITT5
-    2400,
+    700, 900, 1100, 1300, 1500, 1700,
+    2200, 2600, 2400
   ];
 
-  // Goertzel algorithm: detect magnitude of a specific frequency in a buffer
   const goertzel = (samples, sampleRate, targetFreq) => {
     const N = samples.length;
     const k = Math.round(N * targetFreq / sampleRate);
@@ -460,11 +301,11 @@ const PhreakDialer = () => {
     return Math.sqrt(s1 * s1 + s2 * s2 - coeff * s1 * s2);
   };
 
-  // Match detected frequencies to known tones
+  // Identify tone
   const identifyTone = (magnitudes, sampleRate) => {
-    // Find frequencies with magnitude above threshold
     const threshold = 0.02;
     const detected = [];
+    
     TARGET_FREQS.forEach(freq => {
       if (magnitudes[freq] > threshold) {
         detected.push({ freq, mag: magnitudes[freq] });
@@ -472,12 +313,10 @@ const PhreakDialer = () => {
     });
 
     if (detected.length === 0) return null;
-
-    // Sort by magnitude descending
     detected.sort((a, b) => b.mag - a.mag);
     const top = detected.slice(0, 3);
 
-    // Try DTMF match (two freqs: one row + one column)
+    // DTMF
     const dtmfRows = { 697: 0, 770: 1, 852: 2, 941: 3 };
     const dtmfCols = { 1209: 0, 1336: 1, 1477: 2, 1633: 3 };
     const dtmfGrid = [
@@ -486,6 +325,7 @@ const PhreakDialer = () => {
       ['7', '8', '9', 'C'],
       ['*', '0', '#', 'D'],
     ];
+    
     for (const f1 of top) {
       for (const f2 of top) {
         if (f1.freq in dtmfRows && f2.freq in dtmfCols) {
@@ -494,7 +334,7 @@ const PhreakDialer = () => {
       }
     }
 
-    // Try MF match (two MF freqs)
+    // MF
     const mfFreqs = [700, 900, 1100, 1300, 1500, 1700];
     const mfPairs = {
       '700,900': '1', '700,1100': '2', '900,1100': '3',
@@ -505,6 +345,7 @@ const PhreakDialer = () => {
       '1100,1700': 'KP', '1500,1700': 'ST',
       '1300,1700': 'KP2',
     };
+    
     const detectedMF = top.filter(d => mfFreqs.includes(d.freq)).map(d => d.freq).sort((a, b) => a - b);
     if (detectedMF.length >= 2) {
       const key = `${detectedMF[0]},${detectedMF[1]}`;
@@ -518,29 +359,23 @@ const PhreakDialer = () => {
 
     // Red Box 2200Hz
     if (top[0].freq === 2200 && top[0].mag > threshold * 2) {
-      return { type: 'RED BOX', key: '2200Hz pulse', freqs: [2200] };
+      return { type: 'RED BOX', key: '2200Hz', freqs: [2200] };
     }
 
     // CCITT5
     if (top.length >= 2) {
       const freqSet = new Set(top.map(t => t.freq));
       if (freqSet.has(2600) && freqSet.has(2400)) {
-        return { type: 'CCITT5', key: 'Trunk Seizure', freqs: [2600, 2400] };
+        return { type: 'CCITT5', key: 'Trunk Seize', freqs: [2600, 2400] };
       }
-    }
-
-    // Unknown but strong signal
-    if (top[0].mag > threshold * 3) {
-      return { type: '?', key: `${top[0].freq}Hz`, freqs: [top[0].freq] };
     }
 
     return null;
   };
 
-  // Start/stop listening
+  // Toggle listener
   const toggleListener = useCallback(async () => {
     if (isListening) {
-      // Stop
       if (listenerFrameRef.current) cancelAnimationFrame(listenerFrameRef.current);
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach(t => t.stop());
@@ -548,11 +383,10 @@ const PhreakDialer = () => {
       }
       setIsListening(false);
       setCurrentTone(null);
-      logMessage("Listener stopped");
+      logMessage('Listener stopped');
       return;
     }
 
-    // Start
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
@@ -560,7 +394,7 @@ const PhreakDialer = () => {
       const ctx = audioContextRef.current;
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 4096; // Good frequency resolution
+      analyser.fftSize = 4096;
       source.connect(analyser);
       analyserRef.current = analyser;
 
@@ -572,7 +406,6 @@ const PhreakDialer = () => {
       const detect = () => {
         analyser.getFloatTimeDomainData(buffer);
         
-        // Run Goertzel on each target frequency
         const magnitudes = {};
         TARGET_FREQS.forEach(freq => {
           magnitudes[freq] = goertzel(buffer, ctx.sampleRate, freq);
@@ -583,12 +416,11 @@ const PhreakDialer = () => {
 
         if (tone) {
           setCurrentTone(tone);
-          // Log new tones (debounce 300ms)
           const toneKey = `${tone.type}:${tone.key}`;
           if (toneKey !== lastDetected || now - lastTime > 300) {
             lastDetected = toneKey;
             lastTime = now;
-            logMessage(`Detected ${tone.type}: ${tone.key} [${tone.freqs.join('Hz + ')}Hz]`);
+            logMessage(`Detected ${tone.type}: ${tone.key}`);
             setDetectedTones(prev => [...prev.slice(-49), { ...tone, time: now }]);
           }
         } else {
@@ -601,13 +433,13 @@ const PhreakDialer = () => {
 
       detect();
       setIsListening(true);
-      logMessage("Listener started — play a tone near the microphone");
+      logMessage('Listener started');
     } catch (e) {
-      logMessage("Microphone access denied: " + e.message);
+      logMessage('Microphone access denied');
     }
   }, [isListening]);
 
-  // Cleanup listener on unmount
+  // Cleanup
   useEffect(() => {
     return () => {
       if (listenerFrameRef.current) cancelAnimationFrame(listenerFrameRef.current);
@@ -615,757 +447,671 @@ const PhreakDialer = () => {
     };
   }, []);
 
-  const clearDetected = () => {
-    setDetectedTones([]);
-    setCurrentTone(null);
-    logMessage('Detected tones cleared');
-  };
+  // Export WAV
+  const exportWAV = async () => {
+    if (!toneSequence) {
+      logMessage('No sequence to export');
+      return;
+    }
 
-  // Colors for each mode
-  const blueStyle = {
-    background: '#041636',
-    panel: '#05234e', 
-    button: '#0a3373',
-    specialButton: '#05388c',
-    accent: '#0055ff',
-    text: '#3a9fff'
-  };
+    logMessage('Rendering WAV...');
 
-  const redStyle = {
-    background: '#360404',
-    panel: '#4e0505',
-    button: '#730a0a',
-    specialButton: '#8c0505',
-    accent: '#ff0000',
-    text: '#ff3a3a'
-  };
-
-  const purpleStyle = {
-    background: '#260336',
-    panel: '#4e054e',
-    button: '#560a73',
-    specialButton: '#52058c',
-    accent: '#8800ff',
-    text: '#cc3aff'
-  };
-
-  const greenStyle = {
-    background: '#0d0d0d',
-    panel: '#0f1d0f',
-    button: '#0a350a',
-    specialButton: '#054205',
-    accent: '#00ff00',
-    text: '#3aff3a'
-  };
-
-  const orangeStyle = {
-    background: '#1a0d00',
-    panel: '#2d1800',
-    button: '#3d2200',
-    specialButton: '#4d2c00',
-    accent: '#ff8800',
-    text: '#ffaa44'
-  };
-
-  // Get current style based on active tab
-  const getCurrentStyle = () => {
-    switch (activeTab) {
-      case 'blueBox': return blueStyle;
-      case 'redBox': return redStyle;
-      case 'advanced': return purpleStyle;
-      case 'terminal': return greenStyle;
-      case 'listener': return orangeStyle;
-      default: return blueStyle;
+    try {
+      const toneArray = toneSequence.split(' ');
+      const toneDuration = 0.3;
+      const gapDuration = 0.2;
+      const totalDuration = toneArray.length * (toneDuration + gapDuration);
+      
+      const sampleRate = 44100;
+      const offlineCtx = new OfflineAudioContext(1, Math.ceil(sampleRate * totalDuration), sampleRate);
+      
+      let currentTime = 0;
+      
+      toneArray.forEach(tone => {
+        let frequencies = null;
+        
+        if (tones.dtmf[tone]) frequencies = tones.dtmf[tone];
+        else if (tones.mf[tone]) frequencies = tones.mf[tone];
+        else if (tone === 'SF2600') frequencies = [2600];
+        else if (['NICKEL', 'DIME', 'QUARTER'].includes(tone)) frequencies = [2200];
+        
+        if (frequencies) {
+          const gainNode = offlineCtx.createGain();
+          gainNode.gain.setValueAtTime(0, currentTime);
+          gainNode.gain.linearRampToValueAtTime(0.5, currentTime + 0.01);
+          gainNode.gain.setValueAtTime(0.5, currentTime + toneDuration - 0.01);
+          gainNode.gain.linearRampToValueAtTime(0, currentTime + toneDuration);
+          gainNode.connect(offlineCtx.destination);
+          
+          frequencies.forEach(freq => {
+            const osc = offlineCtx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            osc.connect(gainNode);
+            osc.start(currentTime);
+            osc.stop(currentTime + toneDuration);
+          });
+        }
+        
+        currentTime += toneDuration + gapDuration;
+      });
+      
+      const audioBuffer = await offlineCtx.startRendering();
+      const wav = audioBufferToWAV(audioBuffer);
+      
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(wav);
+      link.download = 'phreakdialer.wav';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      logMessage('WAV exported');
+    } catch (e) {
+      logMessage('Export failed');
     }
   };
 
-  const style = getCurrentStyle();
+  // WAV encoder
+  const audioBufferToWAV = (audioBuffer) => {
+    const numberOfChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const bitDepth = 16;
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numberOfChannels * bytesPerSample;
+    const dataLength = audioBuffer.length * blockAlign;
+    const fileLength = 36 + dataLength;
+    
+    const arrayBuffer = new ArrayBuffer(44 + dataLength);
+    const view = new DataView(arrayBuffer);
+    
+    const writeString = (offset, string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, fileLength, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataLength, true);
+    
+    const channelData = audioBuffer.getChannelData(0);
+    let offset = 44;
+    for (let i = 0; i < audioBuffer.length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+    
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  };
+
+  // Styles
+  const colors = {
+    bg: '#0a0a14',
+    panel: '#1a1a2e',
+    accent: '#00ff88',
+    blue: '#0055ff',
+    red: '#ff3333',
+    orange: '#ff8800',
+    text: '#e0e0e0',
+    dimText: '#808080'
+  };
 
   return (
     <div style={{
-      backgroundColor: style.background,
-      color: style.text,
+      backgroundColor: colors.bg,
+      color: colors.text,
       minHeight: '100vh',
       padding: '16px',
-      fontFamily: 'monospace'
+      fontFamily: 'Share Tech Mono, monospace'
     }}>
-      <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-        {/* Header */}
+      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+        {/* HEADER */}
         <div style={{
-          backgroundColor: style.panel,
+          backgroundColor: colors.panel,
           padding: '16px',
-          borderRadius: '8px',
+          borderRadius: '4px',
           marginBottom: '16px',
           display: 'flex',
-          alignItems: 'center'
+          alignItems: 'center',
+          borderLeft: `4px solid ${colors.accent}`
         }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '50%', 
-            backgroundColor: style.button,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginRight: '16px'
-          }}>
-            <Phone color={style.text} size={20} />
-          </div>
-          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-            PHREAK<span style={{ color: style.accent }}>DIALER</span>
+          <Phone color={colors.accent} size={32} style={{ marginRight: '12px' }} />
+          <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 'bold', letterSpacing: '2px' }}>
+            PHREAKDIALER
           </h1>
         </div>
-        
-        {/* Tabs */}
-        <div style={{ display: 'flex', marginBottom: '16px' }}>
-          <button 
-            onClick={() => setActiveTab('blueBox')}
-            style={{
-              backgroundColor: activeTab === 'blueBox' ? blueStyle.panel : '#0c0c14',
-              color: activeTab === 'blueBox' ? blueStyle.text : '#777',
-              border: 'none',
-              padding: '8px 16px',
-              marginRight: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <Phone size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-            BLUE BOX
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('redBox')}
-            style={{
-              backgroundColor: activeTab === 'redBox' ? redStyle.panel : '#0c0c14',
-              color: activeTab === 'redBox' ? redStyle.text : '#777',
-              border: 'none',
-              padding: '8px 16px',
-              marginRight: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <Monitor size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-            RED BOX
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('advanced')}
-            style={{
-              backgroundColor: activeTab === 'advanced' ? purpleStyle.panel : '#0c0c14',
-              color: activeTab === 'advanced' ? purpleStyle.text : '#777',
-              border: 'none',
-              padding: '8px 16px',
-              marginRight: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <Wrench size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-            ADVANCED
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('terminal')}
-            style={{
-              backgroundColor: activeTab === 'terminal' ? greenStyle.panel : '#0c0c14',
-              color: activeTab === 'terminal' ? greenStyle.text : '#777',
-              border: 'none',
-              padding: '8px 16px',
-              cursor: 'pointer'
-            }}
-          >
-            <Terminal size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-            TERMINAL
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('listener')}
-            style={{
-              backgroundColor: activeTab === 'listener' ? orangeStyle.panel : '#0c0c14',
-              color: activeTab === 'listener' ? orangeStyle.text : '#777',
-              border: 'none',
-              padding: '8px 16px',
-              cursor: 'pointer'
-            }}
-          >
-            {isListening ? <MicOff size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> : <Mic size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />}
-            LISTEN
-          </button>
-        </div>
-        
-        {/* Main content */}
+
+        {/* MODE SWITCHER */}
         <div style={{
-          backgroundColor: style.panel,
-          padding: '16px',
-          borderRadius: '8px',
+          display: 'flex',
+          gap: '8px',
           marginBottom: '16px'
         }}>
-          {/* Sequence display */}
+          <button
+            onClick={() => setMode('DTMF')}
+            style={{
+              backgroundColor: mode === 'DTMF' ? colors.blue : colors.panel,
+              color: colors.text,
+              border: `1px solid ${mode === 'DTMF' ? colors.blue : colors.dimText}`,
+              padding: '10px 20px',
+              borderRadius: '4px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              flex: 1,
+              transition: 'all 0.2s'
+            }}
+          >
+            [DTMF]
+          </button>
+          <button
+            onClick={() => setMode('MF')}
+            style={{
+              backgroundColor: mode === 'MF' ? colors.blue : colors.panel,
+              color: colors.text,
+              border: `1px solid ${mode === 'MF' ? colors.blue : colors.dimText}`,
+              padding: '10px 20px',
+              borderRadius: '4px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              flex: 1,
+              transition: 'all 0.2s'
+            }}
+          >
+            [MF TONES]
+          </button>
+        </div>
+
+        {/* SEQUENCE BUFFER */}
+        <div style={{
+          backgroundColor: colors.panel,
+          padding: '12px 16px',
+          borderRadius: '4px',
+          marginBottom: '16px',
+          borderLeft: `4px solid ${colors.accent}`
+        }}>
+          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '8px', textTransform: 'uppercase' }}>
+            Sequence Buffer
+          </div>
+          <div style={{
+            backgroundColor: '#000',
+            padding: '12px',
+            borderRadius: '2px',
+            marginBottom: '12px',
+            minHeight: '32px',
+            fontFamily: 'monospace',
+            fontSize: '14px',
+            wordBreak: 'break-all'
+          }}>
+            {toneSequence || <span style={{ color: colors.dimText }}>[ EMPTY ]</span>}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={playSequence}
+              style={{
+                backgroundColor: colors.blue,
+                color: colors.text,
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px'
+              }}
+            >
+              <Play size={14} /> PLAY
+            </button>
+            <button
+              onClick={clearSequence}
+              style={{
+                backgroundColor: colors.red,
+                color: colors.text,
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                flex: 1
+              }}
+            >
+              CLEAR
+            </button>
+            <button
+              onClick={exportWAV}
+              style={{
+                backgroundColor: colors.orange,
+                color: colors.text,
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                flex: 1
+              }}
+            >
+              WAV
+            </button>
+          </div>
+        </div>
+
+        {/* DIALPAD */}
+        <div style={{
+          backgroundColor: colors.panel,
+          padding: '16px',
+          borderRadius: '4px',
+          marginBottom: '16px',
+          borderLeft: `4px solid ${colors.blue}`
+        }}>
+          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '12px', textTransform: 'uppercase' }}>
+            Dialpad [{mode}]
+          </div>
+          
+          {mode === 'DTMF' ? (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: '8px'
+            }}>
+              {['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D'].map(key => (
+                <button
+                  key={key}
+                  onClick={() => playTone(key)}
+                  style={{
+                    backgroundColor: ['A', 'B', 'C', 'D'].includes(key) ? colors.red : colors.panel,
+                    color: colors.text,
+                    border: `1px solid ${colors.blue}`,
+                    padding: '16px',
+                    borderRadius: '2px',
+                    fontSize: '18px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'all 0.1s'
+                  }}
+                  onMouseDown={(e) => e.target.style.opacity = '0.7'}
+                  onMouseUp={(e) => e.target.style.opacity = '1'}
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '8px',
+                flex: 3
+              }}>
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9', '11', '0', '12'].map(key => (
+                  <button
+                    key={key}
+                    onClick={() => playTone(key)}
+                    style={{
+                      backgroundColor: colors.panel,
+                      color: colors.text,
+                      border: `1px solid ${colors.blue}`,
+                      padding: '16px',
+                      borderRadius: '2px',
+                      fontSize: '16px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                    onMouseDown={(e) => e.target.style.opacity = '0.7'}
+                    onMouseUp={(e) => e.target.style.opacity = '1'}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr',
+                gap: '8px',
+                flex: 1
+              }}>
+                {['KP', 'KP2', 'ST', 'ST2', 'ST3'].map(key => (
+                  <button
+                    key={key}
+                    onClick={() => playTone(key)}
+                    style={{
+                      backgroundColor: colors.red,
+                      color: colors.text,
+                      border: `1px solid ${colors.red}`,
+                      padding: '12px',
+                      borderRadius: '2px',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                    onMouseDown={(e) => e.target.style.opacity = '0.7'}
+                    onMouseUp={(e) => e.target.style.opacity = '1'}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* SPECIAL TONES */}
+        <div style={{
+          backgroundColor: colors.panel,
+          padding: '16px',
+          borderRadius: '4px',
+          marginBottom: '16px',
+          borderLeft: `4px solid ${colors.red}`
+        }}>
+          <div style={{ fontSize: '10px', color: colors.dimText, marginBottom: '12px', textTransform: 'uppercase' }}>
+            Special Tones
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px' }}>
+            <button
+              onMouseDown={handle2600MouseDown}
+              onMouseUp={handle2600MouseUp}
+              onTouchStart={handle2600MouseDown}
+              onTouchEnd={handle2600MouseUp}
+              style={{
+                backgroundColor: colors.red,
+                color: colors.text,
+                border: `1px solid ${colors.red}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              2600Hz<br/><span style={{ fontSize: '10px' }}>(HOLD)</span>
+            </button>
+            <button
+              onClick={() => playSpecialTone('NICKEL', 'NICKEL')}
+              style={{
+                backgroundColor: colors.orange,
+                color: colors.text,
+                border: `1px solid ${colors.orange}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              NICKEL<br/><span style={{ fontSize: '10px' }}>5¢</span>
+            </button>
+            <button
+              onClick={() => playSpecialTone('DIME', 'DIME')}
+              style={{
+                backgroundColor: colors.orange,
+                color: colors.text,
+                border: `1px solid ${colors.orange}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              DIME<br/><span style={{ fontSize: '10px' }}>10¢</span>
+            </button>
+            <button
+              onClick={() => playSpecialTone('QUARTER', 'QUARTER')}
+              style={{
+                backgroundColor: colors.orange,
+                color: colors.text,
+                border: `1px solid ${colors.orange}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              QUARTER<br/><span style={{ fontSize: '10px' }}>25¢</span>
+            </button>
+            <button
+              onClick={() => playSpecialTone('TRUNK_SEIZE', 'SEIZE')}
+              style={{
+                backgroundColor: colors.red,
+                color: colors.text,
+                border: `1px solid ${colors.red}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              TRUNK<br/><span style={{ fontSize: '10px' }}>SEIZE</span>
+            </button>
+            <button
+              onClick={() => playSpecialTone('TRUNK_CLEAR', 'CLEAR')}
+              style={{
+                backgroundColor: colors.red,
+                color: colors.text,
+                border: `1px solid ${colors.red}`,
+                padding: '12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              TRUNK<br/><span style={{ fontSize: '10px' }}>CLEAR</span>
+            </button>
+          </div>
+        </div>
+
+        {/* TONE LISTENER */}
+        <div style={{
+          backgroundColor: colors.panel,
+          padding: '16px',
+          borderRadius: '4px',
+          marginBottom: '16px',
+          borderLeft: `4px solid ${colors.orange}`
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '12px'
+          }}>
+            <div style={{ fontSize: '10px', color: colors.dimText, textTransform: 'uppercase' }}>
+              Tone Listener
+            </div>
+            <button
+              onClick={toggleListener}
+              style={{
+                backgroundColor: isListening ? colors.red : colors.orange,
+                color: colors.text,
+                border: 'none',
+                padding: '6px 12px',
+                borderRadius: '2px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <Mic size={12} /> {isListening ? 'STOP' : 'LISTEN'}
+            </button>
+          </div>
+
+          {/* Current tone display */}
           <div style={{
             backgroundColor: '#000',
             padding: '16px',
-            borderRadius: '8px',
-            marginBottom: '16px',
-            border: `1px solid ${style.accent}`
+            borderRadius: '2px',
+            textAlign: 'center',
+            minHeight: '60px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: '12px',
+            border: currentTone ? `1px solid ${colors.orange}` : '1px solid #333'
           }}>
-            <div style={{ fontSize: '12px', marginBottom: '8px' }}>SEQUENCE BUFFER</div>
-            <div style={{ 
-              fontSize: '18px', 
-              fontWeight: 'bold', 
-              marginBottom: '16px',
-              minHeight: '24px'
-            }}>
-              {toneSequence || '[ EMPTY ]'}
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button 
-                onClick={playSequence}
-                id="play-sequence-button"
-                style={{
-                  backgroundColor: style.specialButton,
-                  color: style.text,
-                  border: 'none',
-                  padding: '8px 16px',
-                  borderRadius: '4px',
-                  flex: 1,
-                  cursor: 'pointer'
-                }}
-              >
-                <Play size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                PLAY SEQUENCE
-              </button>
-              <button 
-                onClick={clearSequence}
-                style={{
-                  backgroundColor: style.button,
-                  color: style.text,
-                  border: 'none',
-                  padding: '8px 16px',
-                  borderRadius: '4px',
-                  flex: 1,
-                  cursor: 'pointer'
-                }}
-              >
-                CLEAR
-              </button>
-            </div>
-          </div>
-          
-          {/* Tab content */}
-          {activeTab === 'blueBox' && (
-            <div>
-              <div style={{ marginBottom: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px' }}>MODE:</span>
-                <button
-                  onClick={() => setSelectedSystem('DTMF')}
-                  style={{
-                    backgroundColor: selectedSystem === 'DTMF' ? blueStyle.specialButton : blueStyle.button,
-                    color: blueStyle.text,
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  DTMF
-                </button>
-                <button
-                  onClick={() => setSelectedSystem('MF')}
-                  style={{
-                    backgroundColor: selectedSystem === 'MF' ? blueStyle.specialButton : blueStyle.button,
-                    color: blueStyle.text,
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  MF TONES
-                </button>
-              </div>
-              
-              {selectedSystem === 'DTMF' ? (
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(4, 1fr)', 
-                  gap: '8px'
-                }}>
-                  {['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D'].map(key => (
-                    <button
-                      key={key}
-                      onClick={() => playTone(key)}
-                      style={{
-                        backgroundColor: ['A', 'B', 'C', 'D'].includes(key) ? blueStyle.specialButton : blueStyle.button,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      {key}
-                    </button>
-                  ))}
-                </div>
+            {isListening ? (
+              currentTone ? (
+                <>
+                  <div style={{ fontSize: '11px', color: colors.dimText, marginBottom: '4px' }}>
+                    {currentTone.type}
+                  </div>
+                  <div style={{
+                    fontSize: '32px',
+                    fontWeight: 'bold',
+                    color: colors.orange,
+                    letterSpacing: '2px'
+                  }}>
+                    {currentTone.key}
+                  </div>
+                  <div style={{ fontSize: '11px', color: colors.dimText, marginTop: '4px' }}>
+                    {currentTone.freqs.map(f => f + 'Hz').join(' + ')}
+                  </div>
+                </>
               ) : (
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {/* Main dialpad - 3x4 grid with only real MF digits */}
-                  <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: 'repeat(3, 1fr)', 
-                    gap: '8px',
-                    flex: '3'
-                  }}>
-                    {['1', '2', '3', '4', '5', '6', '7', '8', '9', '11', '0', '12'].map(key => (
-                      <button
-                        key={key}
-                        onClick={() => playTone(key)}
-                        style={{
-                          backgroundColor: blueStyle.button,
-                          color: blueStyle.text,
-                          border: 'none',
-                          padding: '12px',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        {key}
-                      </button>
-                    ))}
+                <div style={{ fontSize: '14px', color: colors.dimText }}>🎤 Listening...</div>
+              )
+            ) : (
+              <div style={{ fontSize: '14px', color: colors.dimText }}>Press LISTEN to start</div>
+            )}
+          </div>
+
+          {/* Detected tones log */}
+          <div style={{
+            backgroundColor: '#000',
+            padding: '12px',
+            borderRadius: '2px',
+            maxHeight: '150px',
+            overflowY: 'auto',
+            fontSize: '11px',
+            fontFamily: 'monospace'
+          }}>
+            {detectedTones.length === 0 ? (
+              <div style={{ color: colors.dimText }}>No tones detected</div>
+            ) : (
+              detectedTones
+                .slice()
+                .reverse()
+                .slice(0, 20)
+                .map((t, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: '4px 0',
+                      borderBottom: '1px solid #222',
+                      display: 'flex',
+                      justifyContent: 'space-between'
+                    }}
+                  >
+                    <span>
+                      <span style={{ color: colors.orange, fontWeight: 'bold' }}>
+                        {t.type}
+                      </span>
+                      {' '}
+                      {t.key}
+                    </span>
+                    <span style={{ color: colors.dimText }}>
+                      {t.freqs.map(f => f + 'Hz').join('+')}
+                    </span>
                   </div>
-                  
-                  {/* MF special keys - vertical column */}
-                  <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: '1fr', 
-                    gap: '8px',
-                    flex: '1'
-                  }}>
-                    <button
-                      onClick={() => playTone('KP')}
-                      style={{
-                        backgroundColor: blueStyle.specialButton,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      KP
-                    </button>
-                    <button
-                      onClick={() => playTone('KP2')}
-                      style={{
-                        backgroundColor: blueStyle.specialButton,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      KP2
-                    </button>
-                    <button
-                      onClick={() => playTone('ST')}
-                      style={{
-                        backgroundColor: blueStyle.specialButton,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      ST
-                    </button>
-                    <button
-                      onClick={() => playTone('ST2')}
-                      style={{
-                        backgroundColor: blueStyle.specialButton,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      ST2
-                    </button>
-                    <button
-                      onClick={() => playTone('ST3')}
-                      style={{
-                        backgroundColor: blueStyle.specialButton,
-                        color: blueStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      ST3
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                ))
+            )}
+          </div>
+        </div>
+
+        {/* TERMINAL LOG */}
+        <div style={{
+          backgroundColor: colors.panel,
+          padding: '12px 16px',
+          borderRadius: '4px',
+          borderLeft: `4px solid ${colors.accent}`
+        }}>
+          <button
+            onClick={() => setLogExpanded(!logExpanded)}
+            style={{
+              backgroundColor: 'transparent',
+              color: colors.dimText,
+              border: 'none',
+              padding: '0 0 8px 0',
+              fontSize: '10px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              marginBottom: logExpanded ? '8px' : '0',
+              width: '100%',
+              textTransform: 'uppercase'
+            }}
+          >
+            <ChevronDown
+              size={12}
+              style={{
+                transform: logExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                transition: 'transform 0.2s'
+              }}
+            />
+            Terminal [{terminalLog.length} events]
+          </button>
           
-          {activeTab === 'redBox' && (
-            <div>
-              <div style={{
-                backgroundColor: '#220000',
-                padding: '16px',
-                borderRadius: '8px',
-                marginBottom: '16px',
-                border: `1px solid ${redStyle.accent}`
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>
-                  RED BOX SIMULATOR
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-                  <button
-                    onClick={() => playRedboxTone('NICKEL')}
-                    style={{
-                      backgroundColor: redStyle.button,
-                      color: redStyle.text,
-                      border: 'none',
-                      padding: '12px',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold' }}>NICKEL</div>
-                    <div style={{ fontSize: '12px' }}>5¢</div>
-                  </button>
-                  <button
-                    onClick={() => playRedboxTone('DIME')}
-                    style={{
-                      backgroundColor: redStyle.button,
-                      color: redStyle.text,
-                      border: 'none',
-                      padding: '12px',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold' }}>DIME</div>
-                    <div style={{ fontSize: '12px' }}>10¢</div>
-                  </button>
-                  <button
-                    onClick={() => playRedboxTone('QUARTER')}
-                    style={{
-                      backgroundColor: redStyle.specialButton,
-                      color: redStyle.text,
-                      border: 'none',
-                      padding: '12px',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold' }}>QUARTER</div>
-                    <div style={{ fontSize: '12px' }}>25¢</div>
-                  </button>
-                </div>
-              </div>
-              
-              <div style={{
-                backgroundColor: '#220000',
-                padding: '16px',
-                borderRadius: '8px',
-                border: `1px solid ${redStyle.accent}`
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>
-                  DIALER MODE
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map(key => (
-                    <button
-                      key={key}
-                      onClick={() => playTone(key)}
-                      style={{
-                        backgroundColor: redStyle.button,
-                        color: redStyle.text,
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '20px',
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      {key}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {activeTab === 'terminal' && (
+          {logExpanded && (
             <div style={{
-              backgroundColor: '#001100',
-              padding: '16px',
-              borderRadius: '8px',
-              border: `1px solid ${greenStyle.accent}`
+              backgroundColor: '#000',
+              padding: '12px',
+              borderRadius: '2px',
+              maxHeight: '200px',
+              overflowY: 'auto',
+              fontSize: '10px',
+              fontFamily: 'monospace',
+              color: colors.dimText,
+              lineHeight: '1.4'
             }}>
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center', 
-                marginBottom: '12px'
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                  TERMINAL OUTPUT
-                </div>
-                <button
-                  onClick={() => setOutput('')}
-                  style={{
-                    backgroundColor: greenStyle.button,
-                    color: greenStyle.text,
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  CLEAR
-                </button>
-              </div>
-              <div style={{
-                backgroundColor: '#000',
-                borderRadius: '4px',
-                padding: '12px',
-                height: '256px',
-                overflowY: 'auto',
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                whiteSpace: 'pre-wrap'
-              }}>
-                {output || "System ready. Waiting for input..."}
-              </div>
+              {terminalLog.slice(0, 50).map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
             </div>
           )}
-          
-          {activeTab === 'listener' && (
-            <div>
-              <div style={{
-                backgroundColor: '#1a0800',
-                padding: '16px',
-                borderRadius: '8px',
-                marginBottom: '16px',
-                border: `1px solid ${orangeStyle.accent}`
-              }}>
-                <div style={{ 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  alignItems: 'center', 
-                  marginBottom: '12px'
-                }}>
-                  <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                    TONE IDENTIFIER
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      onClick={clearDetected}
-                      style={{
-                        backgroundColor: orangeStyle.button,
-                        color: orangeStyle.text,
-                        border: 'none',
-                        padding: '4px 12px',
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      CLEAR
-                    </button>
-                    <button
-                      onClick={toggleListener}
-                      style={{
-                        backgroundColor: isListening ? '#4d0000' : orangeStyle.specialButton,
-                        color: isListening ? '#ff4444' : orangeStyle.text,
-                        border: isListening ? '1px solid #ff4444' : 'none',
-                        padding: '8px 16px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                        animation: isListening ? 'none' : 'none'
-                      }}
-                    >
-                      {isListening ? '■ STOP' : '● LISTEN'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Current detection display */}
-                <div style={{
-                  backgroundColor: '#000',
-                  padding: '16px',
-                  borderRadius: '8px',
-                  textAlign: 'center',
-                  minHeight: '80px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: currentTone ? `1px solid ${orangeStyle.accent}` : '1px solid #333',
-                  transition: 'all 0.15s'
-                }}>
-                  {isListening ? (
-                    currentTone ? (
-                      <>
-                        <div style={{ fontSize: '10px', opacity: 0.6, marginBottom: '4px' }}>{currentTone.type}</div>
-                        <div style={{ fontSize: '36px', fontWeight: 'bold', color: orangeStyle.accent }}>{currentTone.key}</div>
-                        <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px' }}>{currentTone.freqs.join('Hz + ')}Hz</div>
-                      </>
-                    ) : (
-                      <div style={{ fontSize: '14px', opacity: 0.4 }}>
-                        {isListening ? '🎤 Listening...' : 'Ready'}
-                      </div>
-                    )
-                  ) : (
-                    <div style={{ fontSize: '14px', opacity: 0.4 }}>
-                      Press LISTEN to start identifying tones
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Detected tones log */}
-              <div style={{
-                backgroundColor: '#1a0800',
-                padding: '16px',
-                borderRadius: '8px',
-                border: `1px solid ${orangeStyle.accent}`
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>
-                  DETECTED TONES
-                </div>
-                <div style={{
-                  backgroundColor: '#000',
-                  borderRadius: '4px',
-                  padding: '12px',
-                  height: '200px',
-                  overflowY: 'auto',
-                  fontFamily: 'monospace',
-                  fontSize: '12px'
-                }}>
-                  {detectedTones.length === 0 ? (
-                    <div style={{ opacity: 0.4 }}>No tones detected yet...</div>
-                  ) : (
-                    detectedTones.slice().reverse().map((t, i) => (
-                      <div key={i} style={{ 
-                        padding: '4px 0', 
-                        borderBottom: '1px solid #1a1a1a',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center'
-                      }}>
-                        <span>
-                          <span style={{ color: orangeStyle.accent, fontWeight: 'bold' }}>{t.type}</span>
-                          {' '}
-                          <span style={{ color: '#fff' }}>{t.key}</span>
-                        </span>
-                        <span style={{ opacity: 0.4, fontSize: '10px' }}>
-                          {t.freqs.join(' + ')}Hz
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {activeTab === 'advanced' && (
-            <div>
-              <div style={{
-                backgroundColor: '#110022',
-                padding: '16px',
-                borderRadius: '8px',
-                marginBottom: '16px',
-                border: `1px solid ${purpleStyle.accent}`
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>
-                  INTERNATIONAL TRUNK OPERATIONS
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-                  <button
-                    onClick={() => {
-                      logMessage("Generating trunk seizure tone");
-                      generateTone([2600, 2400], 1000);
-                    }}
-                    style={{
-                      backgroundColor: purpleStyle.specialButton,
-                      color: purpleStyle.text,
-                      border: 'none',
-                      padding: '8px',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    INTL TRUNK SEIZE
-                  </button>
-                  <button
-                    onClick={() => {
-                      logMessage("Generating trunk clear tone");
-                      generateTone([2400], 1000);
-                    }}
-                    style={{
-                      backgroundColor: purpleStyle.specialButton,
-                      color: purpleStyle.text,
-                      border: 'none',
-                      padding: '8px',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    INTL TRUNK CLEAR
-                  </button>
-                </div>
-              </div>
-              
-              <div style={{
-                backgroundColor: '#110022',
-                padding: '16px',
-                borderRadius: '8px',
-                border: `1px solid ${purpleStyle.accent}`
-              }}>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>
-                  EXPORT OPTIONS
-                </div>
-                <button
-                  onClick={exportSequenceAsWAV}
-                  style={{
-                    backgroundColor: purpleStyle.specialButton,
-                    color: purpleStyle.text,
-                    border: 'none',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    width: '100%',
-                    cursor: 'pointer'
-                  }}
-                >
-                  EXPORT SEQUENCE AS WAV
-                </button>
-              </div>
+          {!logExpanded && (
+            <div style={{
+              fontSize: '10px',
+              fontFamily: 'monospace',
+              color: colors.dimText
+            }}>
+              {terminalLog[0]}
             </div>
           )}
         </div>
-        
+
         {/* Footer */}
-        <div style={{ textAlign: 'center', fontSize: '12px', opacity: 0.7 }}>
+        <div style={{
+          textAlign: 'center',
+          fontSize: '10px',
+          color: colors.dimText,
+          marginTop: '16px',
+          textTransform: 'uppercase'
+        }}>
           PhreakDialer • Educational Use Only
         </div>
       </div>
