@@ -635,15 +635,27 @@ const PhreakDialer = () => {
               fontSize: '.65rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px',
               fontFamily: "'Orbitron', monospace",
             }}>SEQUENCE</div>
-            <div style={{
-              fontSize: '1rem', fontWeight: 'bold', minHeight: '22px', color: seq ? S.green : S.dim,
-              overflowX: 'auto', whiteSpace: 'nowrap', letterSpacing: '1px',
-            }}>
-              {seq || '[ EMPTY ]'}{seq && <span style={{ animation: 'cursorBlink 1s step-end infinite' }}>▮</span>}
-            </div>
+            <input
+              type="text"
+              value={seq}
+              onChange={e => setSeq(e.target.value)}
+              placeholder="[ EMPTY ]"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              style={{
+                fontSize: '1rem', fontWeight: 'bold', minHeight: '22px', color: S.green,
+                width: '100%', letterSpacing: '1px',
+                background: 'transparent', border: 'none', outline: 'none',
+                fontFamily: S.mono, caretColor: S.green,
+              }}
+            />
             <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
               <Btn onClick={playSeq} color={S.green} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
                 <Play size={13}/> PLAY
+              </Btn>
+              <Btn onClick={() => { if (seq) { navigator.clipboard?.writeText(seq); addLog('Sequence copied'); } }} color={S.cyan} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
+                <Copy size={13}/>
               </Btn>
               <Btn onClick={() => { setSeq(''); addLog('Cleared'); }} color={S.orange} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px' }}>
                 <X size={13}/> CLEAR
