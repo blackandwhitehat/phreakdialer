@@ -274,7 +274,7 @@ const PhreakDialer = () => {
       // Try AudioWorklet first, fall back to AnalyserNode
       let usingWorklet = false;
       try {
-        await ctx.audioWorklet.addModule(process.env.PUBLIC_URL + '/worklet/tone-processor.js');
+        await ctx.audioWorklet.addModule(process.env.PUBLIC_URL + '/worklet/tone-processor.js?v=' + Date.now());
         const source = ctx.createMediaStreamSource(stream);
         const worklet = new AudioWorkletNode(ctx, 'tone-processor');
         worklet.port.onmessage = (ev) => {
@@ -348,6 +348,12 @@ const PhreakDialer = () => {
           if (m[2600] > TH*1.5 && m[2400] > TH*1.5) candidates.push({ type:'CCITT5', key:'TRUNK', freqs:[2600,2400], s:m[2600]+m[2400] });
           if (m[2600] > TH*1.5) candidates.push({ type:'SF', key:'2600', freqs:[2600], s:m[2600] });
           if (m[2200] > TH*1.5) candidates.push({ type:'REDBOX', key:'2200', freqs:[2200], s:m[2200] });
+          // Disambiguate DTMF vs MF (697≈700, overlapping bins)
+          const fbDTMF = candidates.find(c => c.type === 'DTMF');
+          const fbMF = candidates.find(c => c.type === 'MF');
+          if (fbDTMF && fbMF && fbMF.s >= fbDTMF.s * 0.7) {
+            candidates.splice(candidates.indexOf(fbDTMF), 1);
+          }
           candidates.sort((a,b) => b.s - a.s);
           const tone = candidates[0] ? { type:candidates[0].type, key:candidates[0].key, freqs:candidates[0].freqs } : null;
           const toneKey = tone ? `${tone.type}:${tone.key}` : null;

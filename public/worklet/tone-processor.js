@@ -22,12 +22,12 @@ const MF_PAIRS = {
 const ALL_FREQS = [...new Set([...DTMF_ROW, ...DTMF_COL, ...MF_FREQS, 2200, 2400, 2600])];
 
 // Tuning constants
-const MIN_SAMPLES = 1024;
-const HISTORY_LEN = 12;        // require 12 consistent frames
-const HISTORY_AGREE = 8;       // at least 8 of 12 must agree
-const MAG_FLOOR = 0.08;        // absolute minimum magnitude (was 0.04)
-const DOMINANCE_RATIO = 2.0;   // winner must be 2x the runner-up in its group
-const ENERGY_FLOOR = 0.005;    // minimum RMS energy to even bother checking
+const MIN_SAMPLES = 2048;      // more samples = better freq resolution (~21Hz bins at 44.1k)
+const HISTORY_LEN = 10;        // frames of history
+const HISTORY_AGREE = 6;       // at least 6 of 10 must agree
+const MAG_FLOOR = 0.06;        // absolute minimum magnitude
+const DOMINANCE_RATIO = 1.8;   // winner must be 1.8x the runner-up in its group
+const ENERGY_FLOOR = 0.004;    // minimum RMS energy to even bother checking
 
 class ToneProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -165,8 +165,19 @@ class ToneProcessor extends AudioWorkletProcessor {
 
     if (candidates.length === 0) return null;
 
-    // Pick strongest candidate. For two-tone types, strength = sum of both.
-    // Single tones only win if they're truly dominant (no strong DTMF/MF present)
+    // If both DTMF and MF matched, disambiguate by checking nearby frequencies.
+    // DTMF 697 vs MF 700: compare Goertzel magnitudes at exact frequencies.
+    // The real tone will have higher magnitude at the exact target freq.
+    const hasDTMF = candidates.find(c => c.type === 'DTMF');
+    const hasMF = candidates.find(c => c.type === 'MF');
+    if (hasDTMF && hasMF) {
+      // MF tones are louder (higher amplitude in telco), prefer MF if close
+      if (hasMF.strength >= hasDTMF.strength * 0.7) {
+        return { type: hasMF.type, key: hasMF.key, freqs: hasMF.freqs };
+      }
+    }
+
+    // Pick strongest candidate
     candidates.sort((a, b) => b.strength - a.strength);
     return { type: candidates[0].type, key: candidates[0].key, freqs: candidates[0].freqs };
   }
