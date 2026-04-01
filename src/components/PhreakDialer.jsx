@@ -293,7 +293,7 @@ const PhreakDialer = () => {
       }
 
       if (!usingWorklet) {
-        // Fallback: AnalyserNode + main-thread Goertzel
+        // Fallback: AnalyserNode + main-thread Goertzel (with noise rejection)
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 4096;
@@ -310,29 +310,52 @@ const PhreakDialer = () => {
           return Math.sqrt(s1*s1 + s2*s2 - c*s1*s2);
         };
         let lastKey = null;
+        let fbHistory = [];
+        const FB_HIST = 8;
         const detect = () => {
           if (!streamRef.current) return;
           analyser.getFloatTimeDomainData(buf);
+          // RMS energy check
+          let sumSq = 0;
+          for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+          if (Math.sqrt(sumSq / buf.length) < 0.005) {
+            fbHistory.push(null);
+            if (fbHistory.length > FB_HIST) fbHistory.shift();
+            requestAnimationFrame(detect);
+            return;
+          }
           const m = {};
           targetFreqs.forEach(f => { m[f] = goertzel(f); });
-          // Simple DTMF check
-          const rows = [697,770,852,941].map((f,i) => ({i,f,m:m[f]}));
-          const cols = [1209,1336,1477,1633].map((f,i) => ({i,f,m:m[f]}));
-          const br = rows.reduce((a,b) => a.m>b.m?a:b);
-          const bc = cols.reduce((a,b) => a.m>b.m?a:b);
-          const th = 0.04;
+          const TH = 0.08;
+          const DOM = 2.0;
+          // DTMF with dominance
+          const rows = [697,770,852,941].map((f,i) => ({i,f,m:m[f]})).sort((a,b) => b.m - a.m);
+          const cols = [1209,1336,1477,1633].map((f,i) => ({i,f,m:m[f]})).sort((a,b) => b.m - a.m);
           let tone = null;
-          if (br.m > th && bc.m > th) {
+          if (rows[0].m > TH && cols[0].m > TH &&
+              rows[0].m > rows[1].m * DOM && cols[0].m > cols[1].m * DOM) {
             const keys = "123A456B789C*0#D";
-            tone = { type:'DTMF', key:keys[br.i*4+bc.i], freqs:[br.f,bc.f] };
-          } else if (m[2600] > th*2) { tone = { type:'SF', key:'2600', freqs:[2600] }; }
-          else if (m[2200] > th*2) { tone = { type:'REDBOX', key:'2200', freqs:[2200] }; }
-          if (tone && tone.key !== lastKey) {
-            lastKey = tone.key;
+            tone = { type:'DTMF', key:keys[rows[0].i*4+cols[0].i], freqs:[rows[0].f, cols[0].f] };
+          }
+          if (!tone) {
+            const maxDtmf = Math.max(...[697,770,852,941,1209,1336,1477,1633].map(f => m[f]));
+            const HT = TH * 3;
+            if (m[2600] > HT && m[2600] > maxDtmf * 1.5) tone = { type:'SF', key:'2600', freqs:[2600] };
+            else if (m[2200] > HT && m[2200] > maxDtmf * 1.5) tone = { type:'REDBOX', key:'2200', freqs:[2200] };
+          }
+          const toneKey = tone ? `${tone.type}:${tone.key}` : null;
+          fbHistory.push(toneKey);
+          if (fbHistory.length > FB_HIST) fbHistory.shift();
+          const agree = fbHistory.filter(h => h === toneKey).length;
+          if (tone && agree >= 5 && toneKey !== lastKey) {
+            lastKey = toneKey;
             setDetected(tone);
             setDetectedLog(prev => [tone, ...prev.slice(0, 49)]);
             addLog(`Detected ${tone.type}: ${tone.key}`);
-          } else if (!tone) { lastKey = null; setDetected(null); }
+          } else if (!tone && fbHistory.every(h => h === null)) {
+            lastKey = null;
+            setDetected(null);
+          }
           requestAnimationFrame(detect);
         };
         detect();
