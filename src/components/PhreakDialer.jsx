@@ -11,8 +11,10 @@ const PhreakDialer = () => {
   const audioContextRef = useRef(null);
   const oscillatorsRef = useRef([]);
 
-  // Initialize audio context lazily and resume (iOS Safari fix)
-  const ensureAudioContext = async () => {
+  // Initialize audio context lazily and resume — MUST be synchronous for iOS Safari.
+  // iOS requires AudioContext creation + resume() in the same synchronous user gesture handler.
+  // Using async/await breaks the gesture chain and audio stays silent.
+  const ensureAudioContext = () => {
     if (!audioContextRef.current) {
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -24,16 +26,11 @@ const PhreakDialer = () => {
       }
     }
     
-    // Always resume the audio context (iOS Safari requirement)
-    // This is safe to call on already-playing contexts
+    // Synchronously call resume() — iOS Safari requires this in the gesture handler.
+    // resume() returns a promise but we don't await it; calling it synchronously
+    // is enough to unlock the AudioContext on iOS.
     if (audioContextRef.current.state === 'suspended') {
-      try {
-        await audioContextRef.current.resume();
-        logMessage("Audio context resumed");
-      } catch (e) {
-        logMessage("Audio resume failed: " + e.message);
-        return false;
-      }
+      audioContextRef.current.resume();
     }
     
     return true;
@@ -73,10 +70,10 @@ const PhreakDialer = () => {
     }
   };
 
-  // Generate audio tone with envelope shaping
-  const generateTone = async (frequencies, duration = 300) => {
+  // Generate audio tone with envelope shaping — synchronous for iOS Safari
+  const generateTone = (frequencies, duration = 300) => {
     // Ensure audio context is initialized and resumed (iOS Safari fix)
-    const ready = await ensureAudioContext();
+    const ready = ensureAudioContext();
     if (!ready) {
       logMessage("Audio context not available");
       return;
