@@ -248,7 +248,6 @@ const PhreakDialer = () => {
   const playCoin = (coin) => {
     addLog(`RED BOX: ${coin}`);
     setSeq(prev => prev + (prev ? ' ' : '') + coin);
-    triggerToneFlash();
     if (navigator.vibrate) navigator.vibrate(10);
     if (coin === 'NICKEL') { genTone([2200], 66); }
     else if (coin === 'DIME') {
@@ -483,35 +482,28 @@ const PhreakDialer = () => {
   }, []);
 
   // ── Cyberpunk Button Component (Switchboard + Phantom) ──
-  const Btn = ({ children, onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, color = S.green, big, style: sx, ...rest }) => {
-    const [isPressed, setIsPressed] = useState(false);
-    return (
-      <button
-        onClick={onClick}
-        onMouseDown={(e) => { setIsPressed(true); onMouseDown?.(e); }}
-        onMouseUp={(e) => { setIsPressed(false); onMouseUp?.(e); }}
-        onTouchStart={(e) => { setIsPressed(true); onTouchStart?.(e); }}
-        onTouchEnd={(e) => { setIsPressed(false); onTouchEnd?.(e); }}
-        style={{
-          background: `linear-gradient(135deg, ${S.panel}, #0a0a14)`,
-          border: `1px solid ${color}44`, color,
-          fontFamily: S.mono, fontSize: big ? '1.2rem' : '.85rem', fontWeight: 'bold',
-          padding: big ? '14px' : '10px 12px', cursor: 'pointer', borderRadius: '3px',
-          transition: 'all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)', userSelect: 'none',
-          WebkitTapHighlightColor: 'transparent', textTransform: 'uppercase', letterSpacing: '0.5px',
-          boxShadow: `0 0 12px ${color}33, inset 0 0 8px ${color}11`,
-          animation: isPressed ? `buttonPress 0.2s ease-out` : 'none',
-          ...sx,
-        }}
-        onPointerDown={e => { e.currentTarget.style.boxShadow = `0 0 20px ${color}88, 0 0 30px ${color}44, inset 0 0 12px ${color}33`; }}
-        onPointerUp={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; }}
-        onPointerLeave={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; }}
-        {...rest}
-      >
-        {children}
-      </button>
-    );
-  };
+  const Btn = ({ children, onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, color = S.green, big, style: sx, ...rest }) => (
+    <button
+      onClick={onClick} onMouseDown={onMouseDown} onMouseUp={onMouseUp}
+      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+      style={{
+        background: `linear-gradient(135deg, ${S.panel}, #0a0a14)`,
+        border: `1px solid ${color}44`, color,
+        fontFamily: S.mono, fontSize: big ? '1.2rem' : '.85rem', fontWeight: 'bold',
+        padding: big ? '14px' : '10px 12px', cursor: 'pointer', borderRadius: '3px',
+        transition: 'all 0.15s', userSelect: 'none',
+        WebkitTapHighlightColor: 'transparent', textTransform: 'uppercase', letterSpacing: '0.5px',
+        boxShadow: `0 0 12px ${color}33, inset 0 0 8px ${color}11`,
+        ...sx,
+      }}
+      onPointerDown={e => { e.currentTarget.style.boxShadow = `0 0 20px ${color}88, 0 0 30px ${color}44, inset 0 0 12px ${color}33`; e.currentTarget.style.transform = 'scale(0.97)'; }}
+      onPointerUp={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; e.currentTarget.style.transform = 'scale(1)'; }}
+      onPointerLeave={e => { e.currentTarget.style.boxShadow = `0 0 12px ${color}33, inset 0 0 8px ${color}11`; e.currentTarget.style.transform = 'scale(1)'; }}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
 
   // ── Render ──────────────────────────────────
   const tbl = mode === 'DTMF' ? DTMF : MF;
