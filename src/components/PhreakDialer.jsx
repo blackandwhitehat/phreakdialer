@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Phone, Mic, MicOff, Play, X, Download, ChevronDown, ChevronUp } from 'lucide-react';
+import { Phone, Mic, MicOff, Play, X, Download, ChevronDown, ChevronUp, Copy, RotateCcw } from 'lucide-react';
 
 // ── Frequency Tables ──────────────────────────────────────
 const DTMF = {
@@ -520,15 +520,67 @@ const PhreakDialer = () => {
               ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>🎤 Listening...</div>
             ) : <div style={{ color: S.dim, fontSize: '.8rem' }}>Tap LISTEN to identify tones</div>}
           </div>
+          {/* Captured sequence display */}
           {detectedLog.length > 0 && (
-            <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '8px', fontSize: '.7rem' }}>
-              {detectedLog.map((t, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #111' }}>
-                  <span><span style={{ color: S.orange }}>{t.type}</span> {t.key}</span>
-                  <span style={{ color: S.dim }}>{t.freqs.join('+')}Hz</span>
+            <>
+              {/* Decoded string */}
+              <div style={{ background: '#000', border: '1px solid #222', borderRadius: '4px', padding: '8px 10px', marginTop: '8px' }}>
+                <div style={{ fontSize: '.6rem', color: S.dim, marginBottom: '4px', letterSpacing: '1px' }}>CAPTURED SEQUENCE</div>
+                <div style={{ fontSize: '.9rem', fontWeight: 'bold', color: S.orange, wordBreak: 'break-all', letterSpacing: '2px' }}>
+                  {detectedLog.slice().reverse().map(t => t.key).join(' ')}
                 </div>
-              ))}
-            </div>
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                <Btn onClick={() => {
+                  const captured = detectedLog.slice().reverse().map(t => t.key).join(' ');
+                  setSeq(captured);
+                  addLog('Loaded captured sequence into player');
+                }} color={S.green} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                  <Play size={12}/> REPLAY
+                </Btn>
+                <Btn onClick={() => {
+                  const lines = detectedLog.slice().reverse().map((t, i) =>
+                    `${String(i+1).padStart(3)} | ${t.type.padEnd(6)} | ${t.key.padEnd(5)} | ${t.freqs.join('+')}Hz`
+                  );
+                  const header = `PhreakDialer Capture - ${new Date().toISOString()}\n${'='.repeat(50)}\n  #  | Type   | Key   | Frequencies\n${'-'.repeat(50)}`;
+                  const footer = `${'-'.repeat(50)}\nSequence: ${detectedLog.slice().reverse().map(t => t.key).join(' ')}\nTotal: ${detectedLog.length} tones`;
+                  const text = [header, ...lines, footer].join('\n');
+                  const blob = new Blob([text], { type: 'text/plain' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = 'phreakdialer_capture.txt'; a.click();
+                  URL.revokeObjectURL(url);
+                  addLog('Capture log exported');
+                }} color={S.dim} style={{ flex: 1, display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                  <Download size={12}/> SAVE LOG
+                </Btn>
+                <Btn onClick={() => {
+                  const captured = detectedLog.slice().reverse().map(t => t.key).join(' ');
+                  navigator.clipboard?.writeText(captured);
+                  addLog('Sequence copied to clipboard');
+                }} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                  <Copy size={12}/>
+                </Btn>
+                <Btn onClick={() => {
+                  setDetectedLog([]);
+                  setDetected(null);
+                  addLog('Capture cleared');
+                }} color={S.dim} style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'4px', fontSize: '.7rem' }}>
+                  <RotateCcw size={12}/>
+                </Btn>
+              </div>
+
+              {/* Detailed log */}
+              <div style={{ maxHeight: '120px', overflowY: 'auto', marginTop: '8px', fontSize: '.7rem' }}>
+                {detectedLog.map((t, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #111' }}>
+                    <span><span style={{ color: S.orange }}>{t.type}</span> {t.key}</span>
+                    <span style={{ color: S.dim }}>{t.freqs.join('+')}Hz</span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
 
