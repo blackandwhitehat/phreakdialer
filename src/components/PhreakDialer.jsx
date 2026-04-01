@@ -876,31 +876,28 @@ const PhreakDialer = () => {
 
           {/* Footer */}
           <div style={{
-            textAlign: 'center', fontSize: '.6rem', color: S.dim, padding: '12px 0',
-            letterSpacing: '1px', fontFamily: "'Orbitron', monospace",
+            textAlign: 'center', padding: '16px 0 8px',
             animation: 'fadeInStaggered 0.6s ease-out 0.7s backwards',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
           }}>
-            <svg width="14" height="14" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ opacity: 0.5 }}>
-              {/* Ears */}
-              <circle cx="25" cy="25" r="18" fill={S.dim}/>
-              <circle cx="75" cy="25" r="18" fill={S.dim}/>
-              <circle cx="25" cy="25" r="10" fill="#111"/>
-              <circle cx="75" cy="25" r="10" fill="#111"/>
-              {/* Face */}
-              <circle cx="50" cy="55" r="35" fill={S.dim}/>
-              {/* Eye patches */}
-              <ellipse cx="36" cy="48" rx="12" ry="10" fill="#111"/>
-              <ellipse cx="64" cy="48" rx="12" ry="10" fill="#111"/>
-              {/* Eyes */}
-              <circle cx="36" cy="48" r="4" fill={S.dim}/>
-              <circle cx="64" cy="48" r="4" fill={S.dim}/>
-              {/* Nose */}
-              <ellipse cx="50" cy="62" rx="5" ry="3.5" fill="#111"/>
-              {/* Mouth */}
-              <path d="M44 67 Q50 73 56 67" stroke="#111" strokeWidth="2" fill="none"/>
-            </svg>
-            PHREAKDIALER • EDUCATIONAL USE ONLY
+            <a href="https://bamboosec.com" target="_blank" rel="noopener noreferrer">
+              <img
+                src="/panda-logo.png"
+                alt="Panda"
+                style={{
+                  display: 'block', margin: '0 auto 8px', width: '48px', height: '48px',
+                  filter: `drop-shadow(0 0 10px ${S.accent}33)`,
+                  transition: 'all 0.4s',
+                }}
+                onMouseEnter={e => { e.target.style.transform = 'scale(1.08)'; e.target.style.filter = `drop-shadow(0 0 18px ${S.accent}55) drop-shadow(0 0 35px rgba(0,200,255,.15))`; }}
+                onMouseLeave={e => { e.target.style.transform = 'scale(1)'; e.target.style.filter = `drop-shadow(0 0 10px ${S.accent}33)`; }}
+              />
+            </a>
+            <div style={{
+              fontSize: '.6rem', color: S.dim, letterSpacing: '1px',
+              fontFamily: "'Orbitron', monospace",
+            }}>
+              PHREAKDIALER • EDUCATIONAL USE ONLY
+            </div>
           </div>
         </div>
       </div>
