@@ -876,15 +876,21 @@ const PhreakDialer = () => {
 
           {/* Footer */}
           <div style={{
-            textAlign: 'center', padding: '16px 0 8px',
+            textAlign: 'center', padding: '12px 0 8px',
             animation: 'fadeInStaggered 0.6s ease-out 0.7s backwards',
           }}>
+            <div style={{
+              fontSize: '.6rem', color: S.dim, letterSpacing: '1px',
+              fontFamily: "'Orbitron', monospace",
+            }}>
+              PHREAKDIALER • EDUCATIONAL USE ONLY
+            </div>
             <a href="https://bamboosec.com" target="_blank" rel="noopener noreferrer">
               <img
                 src="/panda-logo.png"
                 alt="Panda"
                 style={{
-                  display: 'block', margin: '0 auto 8px', width: '48px', height: '48px',
+                  display: 'block', margin: '8px auto 0', width: '48px', height: '48px',
                   filter: `drop-shadow(0 0 10px ${S.accent}33)`,
                   transition: 'all 0.4s',
                 }}
@@ -892,12 +898,6 @@ const PhreakDialer = () => {
                 onMouseLeave={e => { e.target.style.transform = 'scale(1)'; e.target.style.filter = `drop-shadow(0 0 10px ${S.accent}33)`; }}
               />
             </a>
-            <div style={{
-              fontSize: '.6rem', color: S.dim, letterSpacing: '1px',
-              fontFamily: "'Orbitron', monospace",
-            }}>
-              PHREAKDIALER • EDUCATIONAL USE ONLY
-            </div>
           </div>
         </div>
       </div>
