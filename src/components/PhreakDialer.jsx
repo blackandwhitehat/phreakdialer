@@ -11,37 +11,65 @@ const PhreakDialer = () => {
   const audioContextRef = useRef(null);
   const oscillatorsRef = useRef([]);
 
-  // Initialize audio context lazily and resume — MUST be synchronous for iOS Safari.
-  // iOS requires AudioContext creation + resume() in the same synchronous user gesture handler.
-  // Using async/await breaks the gesture chain and audio stays silent.
+  const audioUnlockedRef = useRef(false);
+
+  // iOS Safari nuclear unlock: play a silent buffer via native touchstart event.
+  // React synthetic events don't always count as "user gestures" on iOS Safari.
+  // This native handler fires BEFORE React's onClick and unlocks the AudioContext.
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (audioUnlockedRef.current) return;
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!audioContextRef.current) {
+          audioContextRef.current = new AudioContext();
+        }
+        const ctx = audioContextRef.current;
+        // Resume if suspended
+        if (ctx.state === 'suspended') ctx.resume();
+        // Play a silent buffer — this is THE iOS Safari unlock trick.
+        // iOS requires an AudioBufferSourceNode.start() in a user gesture.
+        const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        src.onended = () => {
+          audioUnlockedRef.current = true;
+          logMessage("Audio unlocked (iOS)");
+        };
+        // Also mark as unlocked immediately for non-iOS
+        audioUnlockedRef.current = true;
+      } catch (e) {
+        // Silently fail, will retry on next touch
+      }
+    };
+    // Use native touchstart + mousedown — fires before React synthetic events
+    document.addEventListener('touchstart', unlockAudio, { once: false, passive: true });
+    document.addEventListener('mousedown', unlockAudio, { once: false, passive: true });
+    return () => {
+      document.removeEventListener('touchstart', unlockAudio);
+      document.removeEventListener('mousedown', unlockAudio);
+      stopAllTones();
+    };
+  }, []);
+
+  // Ensure audio context exists and is running
   const ensureAudioContext = () => {
     if (!audioContextRef.current) {
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioContextRef.current = new AudioContext();
-        logMessage("Audio system initialized");
       } catch (e) {
         logMessage("Audio initialization failed: " + e.message);
         return false;
       }
     }
-    
-    // Synchronously call resume() — iOS Safari requires this in the gesture handler.
-    // resume() returns a promise but we don't await it; calling it synchronously
-    // is enough to unlock the AudioContext on iOS.
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
-    
     return true;
   };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopAllTones();
-    };
-  }, []);
 
   // Tone definitions
   const tones = {
