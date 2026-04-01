@@ -879,7 +879,27 @@ const PhreakDialer = () => {
             textAlign: 'center', fontSize: '.6rem', color: S.dim, padding: '12px 0',
             letterSpacing: '1px', fontFamily: "'Orbitron', monospace",
             animation: 'fadeInStaggered 0.6s ease-out 0.7s backwards',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
           }}>
+            <svg width="14" height="14" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ opacity: 0.5 }}>
+              {/* Ears */}
+              <circle cx="25" cy="25" r="18" fill={S.dim}/>
+              <circle cx="75" cy="25" r="18" fill={S.dim}/>
+              <circle cx="25" cy="25" r="10" fill="#111"/>
+              <circle cx="75" cy="25" r="10" fill="#111"/>
+              {/* Face */}
+              <circle cx="50" cy="55" r="35" fill={S.dim}/>
+              {/* Eye patches */}
+              <ellipse cx="36" cy="48" rx="12" ry="10" fill="#111"/>
+              <ellipse cx="64" cy="48" rx="12" ry="10" fill="#111"/>
+              {/* Eyes */}
+              <circle cx="36" cy="48" r="4" fill={S.dim}/>
+              <circle cx="64" cy="48" r="4" fill={S.dim}/>
+              {/* Nose */}
+              <ellipse cx="50" cy="62" rx="5" ry="3.5" fill="#111"/>
+              {/* Mouth */}
+              <path d="M44 67 Q50 73 56 67" stroke="#111" strokeWidth="2" fill="none"/>
+            </svg>
             PHREAKDIALER • EDUCATIONAL USE ONLY
           </div>
         </div>
