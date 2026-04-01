@@ -107,48 +107,68 @@ class ToneProcessor extends AudioWorkletProcessor {
   }
 
   identify(mags) {
+    // Collect all candidate detections, pick the strongest
+    const candidates = [];
+
     // === DTMF: highest row + highest col, both dominant ===
     const rows = DTMF_ROW.map((f, i) => ({ i, f, m: mags[f] })).sort((a, b) => b.m - a.m);
     const cols = DTMF_COL.map((f, i) => ({ i, f, m: mags[f] })).sort((a, b) => b.m - a.m);
-
-    const bestRow = rows[0];
-    const bestCol = cols[0];
-    const rowDominant = bestRow.m > MAG_FLOOR && (rows.length < 2 || bestRow.m > rows[1].m * DOMINANCE_RATIO);
-    const colDominant = bestCol.m > MAG_FLOOR && (cols.length < 2 || bestCol.m > cols[1].m * DOMINANCE_RATIO);
-
-    if (rowDominant && colDominant) {
-      const idx = bestRow.i * 4 + bestCol.i;
-      return { type: 'DTMF', key: DTMF_KEYS[idx], freqs: [bestRow.f, bestCol.f] };
+    if (rows[0].m > MAG_FLOOR && cols[0].m > MAG_FLOOR &&
+        rows[0].m > rows[1].m * DOMINANCE_RATIO &&
+        cols[0].m > cols[1].m * DOMINANCE_RATIO) {
+      const idx = rows[0].i * 4 + cols[0].i;
+      candidates.push({
+        type: 'DTMF', key: DTMF_KEYS[idx], freqs: [rows[0].f, cols[0].f],
+        strength: rows[0].m + cols[0].m
+      });
     }
 
-    // === MF: two strongest MF freqs, both dominant over the rest ===
+    // === MF: two strongest from the MF pool, both above floor, gap to 3rd ===
     const mfSorted = MF_FREQS.map(f => ({ f, m: mags[f] })).sort((a, b) => b.m - a.m);
-    if (mfSorted[0].m > MAG_FLOOR && mfSorted[1].m > MAG_FLOOR &&
-        (mfSorted.length < 3 || mfSorted[1].m > mfSorted[2].m * DOMINANCE_RATIO)) {
-      const pair = [mfSorted[0].f, mfSorted[1].f].sort((a, b) => a - b).join(',');
-      if (MF_PAIRS[pair]) return { type: 'MF', key: MF_PAIRS[pair], freqs: [mfSorted[0].f, mfSorted[1].f] };
+    if (mfSorted[0].m > MAG_FLOOR && mfSorted[1].m > MAG_FLOOR) {
+      // The two winners must have a gap over the 3rd (if exists)
+      const gapOk = mfSorted.length < 3 || mfSorted[2].m < mfSorted[1].m * 0.6;
+      if (gapOk) {
+        const pair = [mfSorted[0].f, mfSorted[1].f].sort((a, b) => a - b).join(',');
+        if (MF_PAIRS[pair]) {
+          candidates.push({
+            type: 'MF', key: MF_PAIRS[pair], freqs: [mfSorted[0].f, mfSorted[1].f],
+            strength: mfSorted[0].m + mfSorted[1].m
+          });
+        }
+      }
     }
 
-    // === Single-frequency tones (need high magnitude + no competing DTMF) ===
-    const maxDtmf = Math.max(...DTMF_ROW.map(f => mags[f]), ...DTMF_COL.map(f => mags[f]));
-    const highThresh = MAG_FLOOR * 3;
-
-    // CCITT5: 2600 + 2400 together
-    if (mags[2600] > highThresh && mags[2400] > highThresh && mags[2600] > maxDtmf && mags[2400] > maxDtmf) {
-      return { type: 'CCITT5', key: 'TRUNK', freqs: [2600, 2400] };
+    // === CCITT5: 2600 + 2400 together ===
+    if (mags[2600] > MAG_FLOOR && mags[2400] > MAG_FLOOR) {
+      candidates.push({
+        type: 'CCITT5', key: 'TRUNK', freqs: [2600, 2400],
+        strength: mags[2600] + mags[2400]
+      });
     }
 
-    // SF 2600 (must be clearly dominant over everything else)
-    if (mags[2600] > highThresh && mags[2600] > maxDtmf * 1.5) {
-      return { type: 'SF', key: '2600', freqs: [2600] };
+    // === SF 2600Hz (single tone) ===
+    if (mags[2600] > MAG_FLOOR * 1.5) {
+      candidates.push({
+        type: 'SF', key: '2600', freqs: [2600],
+        strength: mags[2600]
+      });
     }
 
-    // Red Box 2200
-    if (mags[2200] > highThresh && mags[2200] > maxDtmf * 1.5) {
-      return { type: 'REDBOX', key: '2200', freqs: [2200] };
+    // === Red Box 2200Hz (single tone) ===
+    if (mags[2200] > MAG_FLOOR * 1.5) {
+      candidates.push({
+        type: 'REDBOX', key: '2200', freqs: [2200],
+        strength: mags[2200]
+      });
     }
 
-    return null;
+    if (candidates.length === 0) return null;
+
+    // Pick strongest candidate. For two-tone types, strength = sum of both.
+    // Single tones only win if they're truly dominant (no strong DTMF/MF present)
+    candidates.sort((a, b) => b.strength - a.strength);
+    return { type: candidates[0].type, key: candidates[0].key, freqs: candidates[0].freqs };
   }
 }
 

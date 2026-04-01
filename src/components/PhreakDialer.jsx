@@ -328,21 +328,28 @@ const PhreakDialer = () => {
           targetFreqs.forEach(f => { m[f] = goertzel(f); });
           const TH = 0.08;
           const DOM = 2.0;
-          // DTMF with dominance
+          const candidates = [];
+          // DTMF
           const rows = [697,770,852,941].map((f,i) => ({i,f,m:m[f]})).sort((a,b) => b.m - a.m);
           const cols = [1209,1336,1477,1633].map((f,i) => ({i,f,m:m[f]})).sort((a,b) => b.m - a.m);
-          let tone = null;
-          if (rows[0].m > TH && cols[0].m > TH &&
-              rows[0].m > rows[1].m * DOM && cols[0].m > cols[1].m * DOM) {
+          if (rows[0].m > TH && cols[0].m > TH && rows[0].m > rows[1].m * DOM && cols[0].m > cols[1].m * DOM) {
             const keys = "123A456B789C*0#D";
-            tone = { type:'DTMF', key:keys[rows[0].i*4+cols[0].i], freqs:[rows[0].f, cols[0].f] };
+            candidates.push({ type:'DTMF', key:keys[rows[0].i*4+cols[0].i], freqs:[rows[0].f,cols[0].f], s:rows[0].m+cols[0].m });
           }
-          if (!tone) {
-            const maxDtmf = Math.max(...[697,770,852,941,1209,1336,1477,1633].map(f => m[f]));
-            const HT = TH * 3;
-            if (m[2600] > HT && m[2600] > maxDtmf * 1.5) tone = { type:'SF', key:'2600', freqs:[2600] };
-            else if (m[2200] > HT && m[2200] > maxDtmf * 1.5) tone = { type:'REDBOX', key:'2200', freqs:[2200] };
+          // MF
+          const mfF = [700,900,1100,1300,1500,1700];
+          const mfP = {'700,900':'1','700,1100':'2','900,1100':'3','700,1300':'4','900,1300':'5','1100,1300':'6','700,1500':'7','900,1500':'8','1100,1500':'9','1300,1500':'0','700,1700':'11','900,1700':'12','1100,1700':'KP','1500,1700':'ST','1300,1700':'KP2'};
+          const mfS = mfF.map(f => ({f,m:m[f]})).sort((a,b) => b.m - a.m);
+          if (mfS[0].m > TH && mfS[1].m > TH && (mfS.length < 3 || mfS[2].m < mfS[1].m * 0.6)) {
+            const pair = [mfS[0].f,mfS[1].f].sort((a,b) => a-b).join(',');
+            if (mfP[pair]) candidates.push({ type:'MF', key:mfP[pair], freqs:[mfS[0].f,mfS[1].f], s:mfS[0].m+mfS[1].m });
           }
+          // SF/RedBox/CCITT5
+          if (m[2600] > TH*1.5 && m[2400] > TH*1.5) candidates.push({ type:'CCITT5', key:'TRUNK', freqs:[2600,2400], s:m[2600]+m[2400] });
+          if (m[2600] > TH*1.5) candidates.push({ type:'SF', key:'2600', freqs:[2600], s:m[2600] });
+          if (m[2200] > TH*1.5) candidates.push({ type:'REDBOX', key:'2200', freqs:[2200], s:m[2200] });
+          candidates.sort((a,b) => b.s - a.s);
+          const tone = candidates[0] ? { type:candidates[0].type, key:candidates[0].key, freqs:candidates[0].freqs } : null;
           const toneKey = tone ? `${tone.type}:${tone.key}` : null;
           fbHistory.push(toneKey);
           if (fbHistory.length > FB_HIST) fbHistory.shift();
