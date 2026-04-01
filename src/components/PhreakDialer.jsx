@@ -366,23 +366,27 @@ const PhreakDialer = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const ctx = ensureCtx();
+      // Use a dedicated AudioContext for the listener to avoid worklet caching issues
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const listenerCtx = new AC();
+      if (listenerCtx.state === 'suspended') await listenerCtx.resume();
 
       // Try AudioWorklet first, fall back to AnalyserNode
       let usingWorklet = false;
       try {
-        await ctx.audioWorklet.addModule(process.env.PUBLIC_URL + '/worklet/tone-processor.js?v=' + Date.now());
-        const source = ctx.createMediaStreamSource(stream);
-        const worklet = new AudioWorkletNode(ctx, 'tone-processor');
+        await listenerCtx.audioWorklet.addModule(process.env.PUBLIC_URL + '/worklet/tone-processor.js?v=' + Date.now());
+        const source = listenerCtx.createMediaStreamSource(stream);
+        const worklet = new AudioWorkletNode(listenerCtx, 'tone-processor');
         worklet.port.onmessage = (ev) => {
           if (ev.data) {
             setDetected(ev.data);
             setDetectedLog(prev => [ev.data, ...prev.slice(0, 49)]);
             addLog(`Detected ${ev.data.type}: ${ev.data.key} [${ev.data.freqs.join('+')}Hz]`);
+            triggerToneFlash();
           }
         };
         source.connect(worklet);
-        worklet.connect(ctx.destination);
+        worklet.connect(listenerCtx.destination);
         usingWorklet = true;
       } catch (e) {
         // AudioWorklet not supported, use fallback
@@ -391,15 +395,15 @@ const PhreakDialer = () => {
 
       if (!usingWorklet) {
         // Fallback: AnalyserNode + main-thread Goertzel (with noise rejection)
-        const source = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
+        const source = listenerCtx.createMediaStreamSource(stream);
+        const analyser = listenerCtx.createAnalyser();
         analyser.fftSize = 4096;
         source.connect(analyser);
         const buf = new Float32Array(analyser.fftSize);
         const targetFreqs = [697,770,852,941,1209,1336,1477,1633,700,900,1100,1300,1500,1700,2200,2400,2600];
         const goertzel = (f) => {
           const N = buf.length;
-          const k = Math.round(N * f / ctx.sampleRate);
+          const k = Math.round(N * f / listenerCtx.sampleRate);
           const w = (2 * Math.PI * k) / N;
           const c = 2 * Math.cos(w);
           let s1 = 0, s2 = 0;
